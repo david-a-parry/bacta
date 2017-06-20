@@ -11,10 +11,10 @@ def get_parser():
                   description='Identify and remove bacterial reads from BAMS.')
     required_args = parser.add_argument_group('Required Arguments')
     optional_args = parser.add_argument_group('Optional Arguments')
-    required_args.add_argument('-i', '--bam', '--input', required=True, metavar='BAM', 
-                                help='''Input BAM filename''')
+    required_args.add_argument('-i', '--bam', '--input', required=True, 
+                               metavar='BAM', help='''Input BAM filename''')
     required_args.add_argument('-r', '--ref', required=True, metavar='REF', 
-                                help='''Reference fasta file containing 
+                               help='''Reference fasta file containing 
                                         potential contaminant sequences. This 
                                         file  should be indexed with BWA.''')
     optional_args.add_argument('-o', '--output', metavar='BAM', 
