@@ -190,34 +190,33 @@ class BamAnalyzer(object):
                 continue
             score = 0
             clipping = 0
-            if read.cigartuples is None: #check if mapped instead?
-                continue
-            for c in read.cigartuples:
-            #MOVE THIS TO SCORING SECTION
-                try:
-                    score += _cigar_score[c[0]](c[1])
-                except KeyError:
-                    if c[0] not in cig_warned:
-                        self.logger.warn("Unrecognized operator found in " + 
-                                         "CIGAR STRING: '{}'".format(c[0]))
-            #MOVE THE ABOVE TO SCORING SECTION
-                if c[0] == 4 or c[0] == 5:
-                    clipping += c[1]
-            self.logger.debug("Read {}: cigar = {}, score = {}" 
-                             .format(read_name, read.cigarstring, score)) 
-            if not clipping:
-                continue
-            if (self.min_bases_clipped is not None and 
-                clipping >= self.min_bases_clipped):
-                self.store_or_output_read(read, candidate_qnames, pair_tracker)
-            else:
-                l = read.infer_read_length()
-                self.logger.debug("Read {}: cigar = {}, length = {}, clip = {}" 
-                                  .format(read_name, read.cigarstring, l, 
-                                          clipping))
-                if float(clipping)/l >= self.min_fraction_clipped:
-                    self.store_or_output_read(read, candidate_qnames, 
-                                              pair_tracker)
+            if read.cigartuples is not None: #check if mapped instead?
+                for c in read.cigartuples:
+                #MOVE THIS TO SCORING SECTION
+                    try:
+                        score += _cigar_score[c[0]](c[1])
+                    except KeyError:
+                        if c[0] not in cig_warned:
+                            self.logger.warn("Unrecognized operator found in " + 
+                                             "CIGAR STRING: '{}'".format(c[0]))
+                #MOVE THE ABOVE TO SCORING SECTION
+                    if c[0] == 4 or c[0] == 5:
+                        clipping += c[1]
+                self.logger.debug("Read {}: cigar = {}, score = {}" 
+                                 .format(read_name, read.cigarstring, score)) 
+                if clipping:
+                    if (self.min_bases_clipped is not None and 
+                        clipping >= self.min_bases_clipped):
+                        self.store_or_output_read(read, candidate_qnames, 
+                                                            pair_tracker)
+                    else:
+                        l = read.infer_read_length()
+                        self.logger.debug("Read {}: cigar = {}, length = {},"
+                                          .format(read_name, read.cigarstring, 
+                                          l) + " clip = {}" .format(clipping))
+                        if float(clipping)/l >= self.min_fraction_clipped:
+                            self.store_or_output_read(read, candidate_qnames, 
+                                                      pair_tracker)
             if len(pair_tracker[read_name]) > 1:
                 del pair_tracker[read_name]
             self.logger.debug("Tracking {} pairs.".format(len(pair_tracker)))
