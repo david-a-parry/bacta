@@ -113,7 +113,7 @@ class BamAnalyzer(object):
             if not self._is_writable(f):
                 raise RuntimeError('path {} is not writeable'.format(f))
         if bwa is None:
-            bwa = self._which("bwa")
+            bwa = "bwa"
         if self._which(bwa) is None:
             raise RuntimeError('Could not find bwa executable - please ' + 
                                'ensure bwa is installed and on your PATH or ' + 
