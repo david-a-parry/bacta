@@ -210,6 +210,7 @@ class BamAnalyzer(object):
                     elif self.check_read_clipping(read):
                         if read_name in pair_tracker:
                             self.output_pair(read, pair_tracker[read_name])
+                            del pair_tracker[read_name]
                         else:
                             candidate_qnames.add(read_name)
                             pair_tracker[read_name] = read
