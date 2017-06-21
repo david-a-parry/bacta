@@ -38,7 +38,8 @@ class BamAnalyzer(object):
 
     def __init__(self, bam=None, ref=None, output=None, contaminants=None, 
                 bwa=None, min_fraction_clipped=0.2, min_bases_clipped=None, 
-                fastqs=None, tmp=None, quiet=False, debug=False):
+                fastqs=None, tmp=None, max_pair_distance=1000000, 
+                quiet=False, debug=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -80,6 +81,14 @@ class BamAnalyzer(object):
                         specified, the system default temporary 
                         directory will be used.
 
+                max_pair_distance:
+                        For speed, reads are stored and analyzed with 
+                        their mate unless creater than this distance 
+                        apart from each other in the genome. Increase 
+                        this value to favour speed at the expense of 
+                        memory and decrease this value to favour memory
+                        conservation over speed. Default=1000000.
+
         '''
         self.bam = bam
         self.bmode = 'rb'
@@ -102,6 +111,7 @@ class BamAnalyzer(object):
         self.min_bases_clipped = min_bases_clipped
         self.tmp = tmp
         self.fastqs = fastqs
+        self.max_pair_distance = max_pair_distance
         if fastqs is None:
             tmpdir =  tempfile.mkdtemp(prefix="bacta_fastq", dir=self.tmp)
             self.fq1 = os.path.join(tmpdir, 'r1.fq.gz')
@@ -173,25 +183,24 @@ class BamAnalyzer(object):
         self.r2_fq = gzip.open(self.fq2, mode='wt')
         self.cig_warned = set()
         candidate_qnames = set()
-        pair_tracker = defaultdict(list)
+        pair_tracker = dict()
         n = 0
         for read in self.bamfile.fetch():
             n += 1
-            if not self.quiet and not self.debug:
-                if not n % 10000:
-                    sys.stderr.write("\r{} records read. At pos {}:{}"
-                                     .format(n, read.reference_name, 
-                                             read.reference_start))
+            if not n % 10000:
+                self.logger.info("{} records read. At pos {}:{}" .format(n, 
+                                 read.reference_name, read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             read_name = self.parse_read_name(read.query_name)
             if read.is_paired:
                 paired = True
-                if read.next_reference_id != read.reference_id:
-                    # we need to fetch mates if on different contig to save
+                if (read.next_reference_id != read.reference_id or 
+                    abs(read.next_reference_start - read.reference_start) > 
+                    self.max_pair_distance):
+                    # we need to fetch mates if very far away to prevent
                     # storing too many reads while waiting to encounter their
-                    # mates (but this is too slow to do for reads with mates on
-                    # the same contig)
+                    # mates (but this is too slow to do for all reads) 
                     if read.is_read1: 
                         try:
                             read2 = self.bamfile.mate(read)
@@ -227,7 +236,6 @@ class BamAnalyzer(object):
                                        'Exiting.')
                 if self.check_pair_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
-        sys.stderr.write("\r")
         self.logger.info("Finished reading {} reads from input BAM" .format(n))
         if candidate_qnames:
             self.logger.warning("{} unpaired candidate reads remaining after "
