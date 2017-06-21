@@ -171,90 +171,122 @@ class BamAnalyzer(object):
         paired = False
         self.r1_fq = gzip.open(self.fq1, mode='wt')
         self.r2_fq = gzip.open(self.fq2, mode='wt')
-        cig_warned = set()
+        self.cig_warned = set()
         candidate_qnames = set()
         pair_tracker = defaultdict(list)
         n = 0
         for read in self.bamfile.fetch():
             n += 1
             if not self.quiet and not self.debug:
-                sys.stderr.write("\r{} reads read...".format(n))
+                if not n % 10000:
+                    sys.stderr.write("\r{} records read. At pos {}:{}"
+                                     .format(n, read.reference_name, 
+                                             read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             read_name = self.parse_read_name(read.query_name)
-            pair_tracker[read_name].append(read)
-            if read_name in candidate_qnames:
-                self.output_pair(read_name, pair_tracker)
-                candidate_qnames.remove(read_name)
-                del pair_tracker[read_name]
-                continue
-            score = 0
-            clipping = 0
-            if read.cigartuples is not None: #check if mapped instead?
-                for c in read.cigartuples:
-                #MOVE THIS TO SCORING SECTION
-                    try:
-                        score += _cigar_score[c[0]](c[1])
-                    except KeyError:
-                        if c[0] not in cig_warned:
-                            self.logger.warn("Unrecognized operator found in " + 
-                                             "CIGAR STRING: '{}'".format(c[0]))
-                #MOVE THE ABOVE TO SCORING SECTION
-                    if c[0] == 4 or c[0] == 5:
-                        clipping += c[1]
-                self.logger.debug("Read {}: cigar = {}, score = {}" 
-                                 .format(read_name, read.cigarstring, score)) 
-                if clipping:
-                    if (self.min_bases_clipped is not None and 
-                        clipping >= self.min_bases_clipped):
-                        self.store_or_output_read(read, candidate_qnames, 
-                                                            pair_tracker)
+            if read.is_paired:
+                paired = True
+                if read.next_reference_id != read.reference_id:
+                    # we need to fetch mates if on different contig to save
+                    # storing too many reads while waiting to encounter their
+                    # mates (but this is too slow to do for reads with mates on
+                    # the same contig)
+                    if read.is_read1: 
+                        try:
+                            read2 = self.bamfile.mate(read)
+                            if (self.check_read_clipping(read) or 
+                                self.check_read_clipping(read2)):
+                                #one of pair is clipped
+                                self.output_pair(read, read2)
+                        except ValueError:
+                            self.logger.warn("Mate not found for {}"
+                                                            .format(read_name))
+                else:
+                    if read_name in candidate_qnames:
+                        self.output_pair(read, pair_tracker[read_name])
+                        candidate_qnames.remove(read_name)
+                        del pair_tracker[read_name]
+                    elif self.check_read_clipping(read):
+                        if read_name in pair_tracker:
+                            self.output_pair(read, pair_tracker[read_name])
+                        else:
+                            candidate_qnames.add(read_name)
+                            pair_tracker[read_name] = read
+                    elif read_name in pair_tracker:
+                        del pair_tracker[read_name]
                     else:
-                        l = read.infer_read_length()
-                        self.logger.debug("Read {}: cigar = {}, length = {},"
-                                          .format(read_name, read.cigarstring, 
-                                          l) + " clip = {}" .format(clipping))
-                        if float(clipping)/l >= self.min_fraction_clipped:
-                            self.store_or_output_read(read, candidate_qnames, 
-                                                      pair_tracker)
-            if len(pair_tracker[read_name]) > 1:
-                del pair_tracker[read_name]
-            self.logger.debug("Tracking {} pairs.".format(len(pair_tracker)))
+                        pair_tracker[read_name] = read
+                self.logger.debug("Tracking {} pairs."
+                                  .format(len(pair_tracker)))
+            else: #single-end reads
+                if paired:
+                    raise RuntimeError('Mixed paired/unpaired reads can not ' +
+                                       'be handled by this program yet. ' + 
+                                       'Exiting.')
+                if self.check_pair_clipping(read):
+                    self.read_to_fastq(read, self.r1_fq)
         sys.stderr.write("\r")
-        self.logger.info("Finished reading {} reads from input BAM".format(n))
+        self.logger.info("Finished reading {} reads from input BAM" .format(n))
         if candidate_qnames:
             self.logger.warning("{} unpaired candidate reads remaining after "
                                 .format(len(candidate_qnames)) + "finished " +
                                 "parsing input BAM file.")
         self.bamfile.close()
             
-    def store_or_output_read(self, read, candidate_pairs, pair_dict):
-        if read.is_paired:
-            read_name = self.parse_read_name(read.query_name)
-            if len(pair_dict[read_name]) > 1:
-                self.output_pair(read_name, pair_dict)
-                candidate_pairs.discard(read_name)
-            else:
-                candidate_pairs.add(read_name)
-                self.logger.debug("Storing read {}".format(read_name))
-        else:
-            self.read_to_fastq(read, r1_fq)
-    
+
+    def score_read(self, read):
+        score = 0
+        if read.cigartuples is not None: #check if mapped instead?
+            for c in read.cigartuples:
+                try:
+                    score += _cigar_score[c[0]](c[1])
+                except KeyError:
+                    if c[0] not in self.cig_warned:
+                        self.logger.warn("Unrecognized operator code found " + 
+                                         "in CIGAR STRING: '{}'".format(c[0]))
+                        self.cig_warned.add(c[0])
+            self.logger.debug("Read {}: cigar = {}, score = {}" 
+                             .format(read_name, read.cigarstring, score)) 
+        return score
+
+    def check_read_clipping(self, read):
+        ''' 
+            Returns True if read is clipped greater than 
+            min_fraction_clipped or min_bases_clipped.
+        '''
+        clipping = 0
+        if read.cigartuples is not None: #check if mapped instead?
+            for c in read.cigartuples:
+                if c[0] == 4 or c[0] == 5:
+                    clipping += c[1]
+            if clipping:
+                if (self.min_bases_clipped is not None and 
+                    clipping >= self.min_bases_clipped):
+                    return True
+                else:
+                    l = read.infer_read_length()
+                    self.logger.debug("Read {}: cigar = {}, length = {},"
+                                      .format(read.query_name, 
+                                              read.cigarstring, 
+                                      l) + " clip = {}" .format(clipping))
+                    if float(clipping)/l >= self.min_fraction_clipped:
+                        return True
+        return False
+
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
         header = '@' + read_name + " ZC:Z:" + (read.cigarstring or '.')
         fh.write(str.join("\n", (header, read.seq, "+", 
                           read.qual)) + "\n")
 
-    def output_pair(self, name, pair_dict):
-        self.logger.debug("Writing pair {}".format(name))
-        pair = pair_dict[name]
-        if pair[0].is_read1:
-            self.read_to_fastq(pair[0], self.r1_fq)
-            self.read_to_fastq(pair[1], self.r2_fq)
+    def output_pair(self, read1, read2):
+        if read1.is_read1:
+            self.read_to_fastq(read1, self.r1_fq)
+            self.read_to_fastq(read2, self.r2_fq)
         else:
-            self.read_to_fastq(pair[0], self.r2_fq)
-            self.read_to_fastq(pair[1], self.r1_fq)
+            self.read_to_fastq(read1, self.r2_fq)
+            self.read_to_fastq(read2, self.r1_fq)
 
     def parse_read_name(self, query_name):
         match = _qname_re.match(query_name)
