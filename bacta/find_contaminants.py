@@ -234,7 +234,7 @@ class BamAnalyzer(object):
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
                                        'Exiting.')
-                if self.check_pair_clipping(read):
+                if self.check_read_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
         self.logger.info("Finished reading {} reads from input BAM" .format(n))
         if candidate_qnames:
