@@ -288,7 +288,7 @@ class BamAnalyzer(object):
 
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
-        header = ('@{} ZC:Z:{} ZP:Z:{}'.format(read_name, 
+        header = ('@{} ZC:Z:{} ZP:Z:{}:{}'.format(read_name, 
                                                (read.cigarstring or '.'),
                                                read.reference_name, 
                                                read.reference_start))
