@@ -6,7 +6,6 @@ import tempfile
 import gzip
 import shutil
 import logging
-from collections import defaultdict
 
 #CIGAR STRING OPERATORS and BAM CODES
 #    M   BAM_CMATCH  0
@@ -185,14 +184,16 @@ class BamAnalyzer(object):
         candidate_qnames = set()
         pair_tracker = dict()
         n = 0
-        for read in self.bamfile.fetch():
+        for read in self.bamfile.fetch(until_eof=True):
             n += 1
             if not n % 10000:
                 self.logger.info("{} records read. At pos {}:{}" .format(n, 
                                  read.reference_name, read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
-            read_name = self.parse_read_name(read.query_name)
+            #read_name = self.parse_read_name(read.query_name) 
+            read_name = read.query_name
+            # do any modern aligners still keep the pair/tag on read ID?
             if read.is_paired:
                 paired = True
                 if (read.next_reference_id != read.reference_id or 
