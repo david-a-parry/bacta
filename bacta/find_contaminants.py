@@ -243,6 +243,8 @@ class BamAnalyzer(object):
                                 .format(len(candidate_qnames)) + "finished " +
                                 "parsing input BAM file.")
         self.bamfile.close()
+        self.r1_fq.close()
+        self.r2_fq.close()
             
 
     def score_read(self, read):
@@ -286,7 +288,10 @@ class BamAnalyzer(object):
 
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
-        header = '@' + read_name + " ZC:Z:" + (read.cigarstring or '.')
+        header = ('@{} ZC:Z:{} ZP:Z:{}'.format(read_name, 
+                                               (read.cigarstring or '.'),
+                                               read.reference_name, 
+                                               read.reference_start))
         fh.write(str.join("\n", (header, read.seq, "+", 
                           read.qual)) + "\n")
 
