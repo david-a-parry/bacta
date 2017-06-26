@@ -270,7 +270,7 @@ class BamAnalyzer(object):
         clipping = 0
         if read.cigartuples is not None: #check if mapped instead?
             for c in read.cigartuples:
-                if c[0] == 4 or c[0] == 5:
+                if c[0] >= 4 and c[0] <= 5:
                     clipping += c[1]
             if clipping:
                 if (self.min_bases_clipped is not None and 
