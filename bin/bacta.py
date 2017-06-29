@@ -68,3 +68,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     runner = BamAnalyzer(**vars(args))
     runner.read_bam()
+    runner.align_candidates()

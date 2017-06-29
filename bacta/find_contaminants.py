@@ -1,11 +1,13 @@
 import sys
 import os
+from subprocess import PIPE, Popen
 import re
 import pysam
 import tempfile
 import gzip
 import shutil
 import logging
+from .cigar_scorer import CigarScorer
 
 #CIGAR STRING OPERATORS and BAM CODES
 #    M   BAM_CMATCH  0
@@ -18,18 +20,6 @@ import logging
 #    =   BAM_CEQUAL  7
 #    X   BAM_CDIFF   8
 #    B   BAM_CBACK   9
-_cigar_score = {
-    0: lambda x: x, 
-    1: lambda x: -6 - x, 
-    2: lambda x: -6 - x,
-    3: lambda x: 0, 
-    4: lambda x: x * -1, 
-    5: lambda x: x * -1, 
-    6: lambda x: 0, 
-    7: lambda x: x,
-    8: lambda x: x * -1,
-    9: lambda x: 0,
-}
 
 _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")  
 
@@ -37,8 +27,9 @@ class BamAnalyzer(object):
 
     def __init__(self, bam=None, ref=None, output=None, contaminants=None, 
                 bwa=None, min_fraction_clipped=0.2, min_bases_clipped=None, 
-                fastqs=None, tmp=None, max_pair_distance=1000000, 
-                quiet=False, debug=False):
+                min_score_diff=30, fastqs=None, tmp=None, 
+                max_pair_distance=1000000, paired=None, quiet=False, 
+                debug=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -87,6 +78,10 @@ class BamAnalyzer(object):
                         this value to favour speed at the expense of 
                         memory and decrease this value to favour memory
                         conservation over speed. Default=1000000.
+                
+                paired: Expect paired end reads if True, single end 
+                        reads if False. If None, then will work it out 
+                        on the fly.
 
         '''
         self.bam = bam
@@ -99,6 +94,7 @@ class BamAnalyzer(object):
         if not os.path.isfile(ref):
             raise RuntimeError('--ref argument "{}" does not ' .format(ref) + 
                                'exist or is not a file')
+        self.ref = ref
         if output is None:
             output = os.path.splitext(bam)[0] + "_bacta.bam"
         if contaminants is None:
@@ -108,9 +104,11 @@ class BamAnalyzer(object):
         self.c_sum = contaminants + '_summary.txt'
         self.min_fraction_clipped = min_fraction_clipped
         self.min_bases_clipped = min_bases_clipped
+        self.min_score_diff = min_score_diff
         self.tmp = tmp
         self.fastqs = fastqs
         self.max_pair_distance = max_pair_distance
+        self.paired = paired
         if fastqs is None:
             tmpdir =  tempfile.mkdtemp(prefix="bacta_fastq", dir=self.tmp)
             self.fq1 = os.path.join(tmpdir, 'r1.fq.gz')
@@ -132,6 +130,7 @@ class BamAnalyzer(object):
         self.debug = debug
         self.quiet = quiet
         self._set_logger()
+        self.cigar_scorer = CigarScorer(self.logger.level)
 
     def _set_logger(self):
         self.logger = logging.getLogger("BACTA")
@@ -172,15 +171,58 @@ class BamAnalyzer(object):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
 
+    def align_candidates(self):
+        ''' use bwa to align candidate reads (after running read_bam).'''
+        #bam_out = open as pipe to BAM self.c_bam 
+        contam_out = open(self.c_sum, 'w')
+        args = [self.bwa, 'mem', '-C', self.ref, self.fq1]
+        if self.paired:
+            args.append(self.fq2)
+        prev_cigar_re = re.compile(r'ZC:Z:(\w+)')
+        prev_pos_re = re.compile(r'ZP:Z:(\w+)')
+        contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "OLDPOS",
+                                         "CONTIG", "POS", "MATE_CONTIG", 
+                                         "MATE_POS")) + "\n")
+        #TODO - give option to output all to a BAM file
+        with Popen(args, bufsize=-1, stdout=PIPE) as bwamem:
+            for alignment in bwamem.stdout:
+                if alignment[0] == '@': #header
+                    continue
+                split = alignment.split()
+                old_cigar = ''
+                old_pos = ''
+                for tag in split[:10:-1]:
+                    match = prev_cigar_re.match(tag)
+                    if match:
+                        old_cigar = match.group(1)
+                        #tags were added with old cigar first - bail
+                        break
+                    match = prev_pos_re.match(tag)
+                    if match:
+                        old_pos = match.group(1)
+                score = self.cigar_scorer.score_cigarstring(split[5])
+                old_score = self.cigar_scorer.score_cigarstring(old_cigar)
+                #TODO - parse pairs together
+                #TODO - deal with multimappings
+                if score > old_score + self.min_score_diff:
+                    #better match against our contamination reference
+                    if split[1] & 2: #pair_mapped
+                        mate_coord = (split[6], split[7])
+                    else:
+                        mate_coord = ('.', '.')
+                    contam_out.write(str.join("\t", 
+                                             (split[0], score, old_score,
+                                              old_pos, split[2], split[3],
+                                              mate_coord[0], mate_coord[1]) )
+                                     + "\n")
+
     def read_bam(self):
         ''' 
             Read a BAM/SAM/CRAM file and identify reads with excessive
             clipping.
         '''
-        paired = False
         self.r1_fq = gzip.open(self.fq1, mode='wt')
         self.r2_fq = gzip.open(self.fq2, mode='wt')
-        self.cig_warned = set()
         candidate_qnames = set()
         pair_tracker = dict()
         n = 0
@@ -195,7 +237,12 @@ class BamAnalyzer(object):
             read_name = read.query_name
             # do any modern aligners still keep the pair/tag on read ID?
             if read.is_paired:
-                paired = True
+                if self.paired is None:
+                    self.paired = True
+                elif not self.paired:
+                    raise RuntimeError('Mixed paired/unpaired reads can not ' +
+                                       'be handled by this program yet. ' + 
+                                       'Exiting.')
                 if (read.next_reference_id != read.reference_id or 
                     abs(read.next_reference_start - read.reference_start) > 
                     self.max_pair_distance):
@@ -231,7 +278,9 @@ class BamAnalyzer(object):
                 self.logger.debug("Tracking {} pairs."
                                   .format(len(pair_tracker)))
             else: #single-end reads
-                if paired:
+                if self.paired is None:
+                    self.paired = False
+                elif self.paired:
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
                                        'Exiting.')
@@ -250,14 +299,7 @@ class BamAnalyzer(object):
     def score_read(self, read):
         score = 0
         if read.cigartuples is not None: #check if mapped instead?
-            for c in read.cigartuples:
-                try:
-                    score += _cigar_score[c[0]](c[1])
-                except KeyError:
-                    if c[0] not in self.cig_warned:
-                        self.logger.warn("Unrecognized operator code found " + 
-                                         "in CIGAR STRING: '{}'".format(c[0]))
-                        self.cig_warned.add(c[0])
+            score = self.cigar_scorer.score_cigartuples(read.cigartuples)
             self.logger.debug("Read {}: cigar = {}, score = {}" 
                              .format(read_name, read.cigarstring, score)) 
         return score
@@ -288,7 +330,7 @@ class BamAnalyzer(object):
 
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
-        header = ('@{} ZC:Z:{} ZP:Z:{}:{}'.format(read_name, 
+        header = ('@{} ZC:Z:{}\tZP:Z:{}:{}'.format(read_name, 
                                                (read.cigarstring or '.'),
                                                read.reference_name, 
                                                read.reference_start))
