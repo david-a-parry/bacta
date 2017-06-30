@@ -8,6 +8,7 @@ import gzip
 import shutil
 import logging
 from .cigar_scorer import CigarScorer
+from .reverse_complement import reverse_complement
 
 #CIGAR STRING OPERATORS and BAM CODES
 #    M   BAM_CMATCH  0
@@ -26,10 +27,10 @@ _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")
 class BamAnalyzer(object):
 
     def __init__(self, bam=None, ref=None, output=None, contaminants=None, 
-                bwa=None, min_fraction_clipped=0.2, min_bases_clipped=None, 
-                min_score_diff=30, fastqs=None, tmp=None, 
-                max_pair_distance=1000000, paired=None, quiet=False, 
-                debug=False):
+                bwa=None, samtools=None, min_fraction_clipped=0.2, 
+                min_bases_clipped=None, min_score_diff=30, min_aligned_score=50,
+                fastqs=None, tmp=None, max_pair_distance=1000000, paired=None, 
+                quiet=False, debug=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -47,6 +48,10 @@ class BamAnalyzer(object):
                         the basename of the input + "_contaminants".
                 
                 bwa:    Location of bwa executable. Only required if not 
+                        in your PATH.
+
+                samtools:
+                        Location of samtools executable. Only required if not 
                         in your PATH.
 
                 min_fraction_clipped:
@@ -105,6 +110,7 @@ class BamAnalyzer(object):
         self.min_fraction_clipped = min_fraction_clipped
         self.min_bases_clipped = min_bases_clipped
         self.min_score_diff = min_score_diff
+        self.min_aligned_score  = min_aligned_score 
         self.tmp = tmp
         self.fastqs = fastqs
         self.max_pair_distance = max_pair_distance
@@ -121,12 +127,17 @@ class BamAnalyzer(object):
                 raise RuntimeError('path {} is not writeable'.format(f))
         if bwa is None:
             bwa = "bwa"
-        if self._which(bwa) is None:
-            raise RuntimeError('Could not find bwa executable - please ' + 
-                               'ensure bwa is installed and on your PATH or ' + 
-                               'otherwise provide the location of a valid ' + 
-                               'bwa executable using the --bwa argument')
+        if samtools is None:
+            samtools = "samtools"
+        for prog in (bwa, samtools):
+            if self._which(prog) is None:
+                raise RuntimeError('Could not find {} executable'.format(prog)+
+                                   ' - please ensure it is installed and on ' + 
+                                   'your PATH or otherwise provide the ' + 
+                                   'location of a valid executable using the' +
+                                   'appropriate argument.')
         self.bwa = bwa
+        self.samtools = samtools
         self.debug = debug
         self.quiet = quiet
         self._set_logger()
@@ -175,20 +186,32 @@ class BamAnalyzer(object):
         ''' use bwa to align candidate reads (after running read_bam).'''
         #bam_out = open as pipe to BAM self.c_bam 
         contam_out = open(self.c_sum, 'w')
+        bam_out = open(self.c_bam, 'wb')
         args = [self.bwa, 'mem', '-C', self.ref, self.fq1]
         if self.paired:
             args.append(self.fq2)
+            pairs = dict()
         prev_cigar_re = re.compile(r'ZC:Z:(\w+)')
-        prev_pos_re = re.compile(r'ZP:Z:(\w+)')
-        contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "OLDPOS",
-                                         "CONTIG", "POS", "MATE_CONTIG", 
-                                         "MATE_POS")) + "\n")
-        #TODO - give option to output all to a BAM file
+        prev_pos_re = re.compile(r'ZP:Z:(\w+:\d+)')
+        self.logger.info("Attempting alignment of clipped reads against {} " 
+                         .format(self.ref) + "using bwa.")
+        self.logger.info("Command is: " + str.join(" ", args))
+        contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "CIGAR",
+                                         "OLDCIGAR", "OLDPOS", "CONTIG", "POS", 
+                                         "MATE_CONTIG", "MATE_POS")) + "\n")
+        dash = '-' #subprocess doesn't seem to like '-' passed as a string
+        samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
+                        stdin=PIPE, bufsize=-1)
         with Popen(args, bufsize=-1, stdout=PIPE) as bwamem:
             for alignment in bwamem.stdout:
+                samwrite.stdin.write(alignment)
+                alignment = alignment.decode(sys.stdout.encoding)
                 if alignment[0] == '@': #header
                     continue
                 split = alignment.split()
+                flag = int(split[1])
+                if flag & 256 or flag & 2048: #not primary/supplementary 
+                    continue
                 old_cigar = ''
                 old_pos = ''
                 for tag in split[:10:-1]:
@@ -202,19 +225,41 @@ class BamAnalyzer(object):
                         old_pos = match.group(1)
                 score = self.cigar_scorer.score_cigarstring(split[5])
                 old_score = self.cigar_scorer.score_cigarstring(old_cigar)
-                #TODO - parse pairs together
-                #TODO - deal with multimappings
-                if score > old_score + self.min_score_diff:
-                    #better match against our contamination reference
-                    if split[1] & 2: #pair_mapped
-                        mate_coord = (split[6], split[7])
+                if self.paired:
+                    if split[0] in pairs:
+                        (p_split, p_score, p_old_score, p_old_cigar, 
+                         p_old_pos) = pairs[split[0]]
+                        if (score + p_score >= self.min_aligned_score *2 and
+                            score + p_score > old_score + p_old_score + 
+                            self.min_score_diff):
+                            self.write_contam_summary(contam_out, score, 
+                                                      old_score, split, 
+                                                      old_cigar, old_pos) 
+                            self.write_contam_summary(contam_out, p_score, 
+                                                      p_old_score, p_split, 
+                                                      p_old_cigar, p_old_pos) 
+                        del pairs[split[0]]
                     else:
-                        mate_coord = ('.', '.')
-                    contam_out.write(str.join("\t", 
-                                             (split[0], score, old_score,
-                                              old_pos, split[2], split[3],
-                                              mate_coord[0], mate_coord[1]) )
-                                     + "\n")
+                        pairs[split[0]] = (split, score, old_score, old_cigar, 
+                                           old_pos)
+                else:
+                    self.write_contam_summary(contam_out, score, old_score, 
+                                              split, old_cigar, old_pos)
+        samwrite.stdin.close()
+
+    def write_contam_summary(self, fh, score, old_score, record, old_cigar, 
+                             old_pos):
+        ''' Write a summary of a contaminant read to fh. '''
+        if int(record[1]) & 2: #pair_mapped
+            mate_coord = (record[6], record[7])
+        else:
+            mate_coord = ('.', '.')
+        #format is: ReadID, Score, OldScore, CIGAR, OldCigar, 
+        #           OldPos, Chrom, Pos MateChrom, MatePos
+        fh.write(str.join("\t", (record[0], str(score), str(old_score), 
+                                 record[5], old_cigar, old_pos, record[2], 
+                                 record[3], mate_coord[0], mate_coord[1]))
+                         + "\n")
 
     def read_bam(self):
         ''' 
@@ -334,8 +379,13 @@ class BamAnalyzer(object):
                                                (read.cigarstring or '.'),
                                                read.reference_name, 
                                                read.reference_start))
-        fh.write(str.join("\n", (header, read.seq, "+", 
-                          read.qual)) + "\n")
+        if read.is_reverse:
+            seq = reverse_complement(read.seq)
+            qual = read.qual
+        else:
+            seq = read.seq
+            qual = read.qual
+        fh.write(str.join("\n", (header, seq, "+", qual)) + "\n")
 
     def output_pair(self, read1, read2):
         if read1.is_read1:
