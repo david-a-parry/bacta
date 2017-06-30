@@ -26,6 +26,23 @@ def get_parser():
                                        Defaults to the basename of the input + 
                                        "_contaminants".
                                     ''')
+    optional_args.add_argument('-v', '--vcf', metavar='VCF', 
+                               help='''VCF file of candidate variants 
+                                       introduced by contamination. If provided 
+                                       the input BAM will be scanned for reads 
+                                       that overlap these reads plus the value 
+                                       of --flanks instead of processing the 
+                                       whole BAM file.''')
+    optional_args.add_argument('--flanks', metavar='FLANKS', type=int, 
+                               default=500,
+                               help='''Amount of bp up and downstream of 
+                                       candidate variants (from --vcf argument) 
+                                       to scan for reads. Default=500.''')
+    optional_args.add_argument('--regions', metavar='REGIONS', nargs='+', 
+                               default=[],
+                               help='''List of regions (in format chr1:1-1000) 
+                                       to scan rather than processing the whole
+                                       BAM file.''')
     optional_args.add_argument('-b', '--bwa', metavar='BWA', 
                                help='''Location of bwa executable. Only 
                                        required if not in your PATH.''')
@@ -33,13 +50,13 @@ def get_parser():
                                help='''Location of samtools executable. Only 
                                        required if not in your PATH.''')
     optional_args.add_argument('-m', '--min_fraction_clipped', metavar='FLOAT', 
-                               default=0.2, 
+                               type=float, default=0.2,
                                help='''Minimum proportion of a read that is 
                                        hard or soft-clipped in the BAM file
                                        for a read to be analyzed as a potential 
                                        contaminant. Default = 0.2''')
     optional_args.add_argument('-n', '--min_bases_clipped', metavar='INT', 
-                               default=None, 
+                               type=int, default=None, 
                                help='''Minimum number of hard or soft-clipped
                                        bases for a read to be analyzed as a 
                                        potential contaminant. This overrides

@@ -26,11 +26,11 @@ _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")
 
 class BamAnalyzer(object):
 
-    def __init__(self, bam=None, ref=None, output=None, contaminants=None, 
+    def __init__(self, bam, ref, output=None, contaminants=None, 
                 bwa=None, samtools=None, min_fraction_clipped=0.2, 
                 min_bases_clipped=None, min_score_diff=30, min_aligned_score=50,
                 fastqs=None, tmp=None, max_pair_distance=1000000, paired=None, 
-                quiet=False, debug=False):
+                regions=[], vcf=None, flanks=500, quiet=False, debug=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -47,12 +47,26 @@ class BamAnalyzer(object):
                         Prefix for contaminant output files. Defaults to 
                         the basename of the input + "_contaminants".
                 
+                regions: 
+                        List of regions (in format chr1:1-1000) to scan
+                        rather than processing the whole BAM file.
+
+                vcf:    VCF file of candidate variants introduced by 
+                        contamination. If provided the BAM will be 
+                        scanned for reads that overlap these reads 
+                        + flanks rather than processing the whole BAM
+                        file.
+
+                flanks: Amount of bp up and downstream of candidate 
+                        variants (from vcf argument) to scan for reads.
+                        Default=500.
+
                 bwa:    Location of bwa executable. Only required if not 
                         in your PATH.
 
                 samtools:
-                        Location of samtools executable. Only required if not 
-                        in your PATH.
+                        Location of samtools executable. Only required 
+                        if not in your PATH.
 
                 min_fraction_clipped:
                         Minimum proportion of a read that is hard or 
@@ -142,6 +156,108 @@ class BamAnalyzer(object):
         self.quiet = quiet
         self._set_logger()
         self.cigar_scorer = CigarScorer(self.logger.level)
+        self.r1_fq = gzip.open(self.fq1, mode='wt')
+        self.r2_fq = gzip.open(self.fq2, mode='wt')
+        self.targets = []
+        self.flanks = flanks
+        if vcf:
+            self._parse_vcf_regions(vcf)
+        if regions:
+            self._parse_regions(regions)
+        if self.targets:
+            self._check_targets()
+
+    def _check_targets(self):
+        ldict = dict(zip( self.bamfile.references, self.bamfile.lengths))
+        for gi in self.targets:
+            if gi.contig not in ldict:
+                raise SystemExit("Contig {} not in BAM index" 
+                                 .format(gi.contig))
+            if ldict[gi.contig] < gi.start:
+                raise SystemExit("ERROR: Start of region {} is ".format(gi) + 
+                                 "greater than the length of contig {}."
+                                 .format(gi.contig))
+            if ldict[gi.contig] < gi.end:
+                self.logger.warn("ERROR: End of region {} is ".format(gi) + 
+                                 "greater than the length of contig {}. "
+                                 .format(gi.contig) + "Reducing region " + 
+                                 "length to {}:{}-{}".format(gi.contig, gi.start, 
+                                                   ldict[gi.contig]))
+                gi.end = ldict[gi.contig]
+            
+
+    def _parse_vcf_regions(self, vcf):
+        self.logger.info("Parsing VCF input and identifying regions...")
+        vfile = pysam.VariantFile(vcf)
+        seen_contigs = set()
+        region = None
+        prev_var = None
+        for rec in vfile.fetch():
+            # create intervals based on variant pos plus self.flanks, merging
+            # any overlapping intervals
+            start = rec.pos - self.flanks
+            end = rec.pos + self.flanks
+            if region is None:
+                region = GenomicInterval(rec.contig, start, end)
+            elif region.contig != rec.contig:
+                if rec.contig in seen_contigs:
+                    raise SystemExit("VCF input must be sorted by chromosome" + 
+                                     " and position. Contig '{}' encountered " 
+                                     .format(record.contig) + "before and " + 
+                                     "after contig '{}'." .format(region[0]))
+                self.targets.append(region)
+                region = GenomicInterval(rec.contig, start, end)
+                seen_contigs.add(rec.contig)
+            else:
+                if rec.pos < prev_var.pos:
+                    raise SystemExit("VCF input must be sorted by chromosome" + 
+                                     " and position. Position {}:{} "
+                                     .format(rec.contig, rec.pos) + 
+                                     "encountered after position {}:{}."
+                                     .format(prev_var.contig, prev_var.pos))
+                if start <= region.end: 
+                    region.end = end #flanks are constand and VCF is sorted
+                                     #so end must be > than region.end
+                else: #no overlap
+                    self.targets.append(region)
+                    region = GenomicInterval(rec.contig, start, end)
+            prev_var = rec
+        self.targets.append(region)
+
+    def _parse_regions(self, regions):
+        self.targets.extend(self._region_strings_to_lists(regions))
+        self._merge_targets()
+
+    def _merge_targets(self):
+        merged = []
+        self.targets = sorted(self.targets)
+        prev_target = self.targets[0]
+        for i in range(1, len(self.targets)):
+            if prev_target.contig != self.targets[i].contig:
+                merged.append(prev_target)
+            elif self.targets[i].start <= prev_target.end:
+                if prev_target.end < self.targets[i].end:
+                    prev_target.end = self.targets[i].end
+            else:
+                merged.append(prev_target)
+                prev_target = self.targets[i]
+        merged.append(prev_target)
+            
+    def _region_strings_to_lists(self, regions):
+        reg_splitter = re.compile(r'[:\-]')
+        gis = []
+        for reg in regions:
+            split = reg_splitter.split(reg)
+            if len(split) != 3:
+                raise SystemExit("Invalid region specified: '{}'" .format(reg))
+            try:
+                start = int(split[1].replace(',', ''))
+                end = int(split[2].replace(',', ''))
+                gis.append(GenomicInterval(split[0], start, end))
+            except ValueError as oops:
+                raise SystemExit("ERROR: Invalid region specified: '{}'"
+                                 .format(reg) + "\n" + str(oops))
+        return gis
 
     def _set_logger(self):
         self.logger = logging.getLogger("BACTA")
@@ -251,7 +367,8 @@ class BamAnalyzer(object):
                              old_pos):
         ''' Write a summary of a contaminant read to fh. '''
         if int(record[1]) & 2: #pair_mapped
-            mate_coord = (record[6], record[7])
+            mate_coord = (record[6] if record[6] != '=' else record[2], 
+                          record[7])
         else:
             mate_coord = ('.', '.')
         #format is: ReadID, Score, OldScore, CIGAR, OldCigar, 
@@ -266,12 +383,29 @@ class BamAnalyzer(object):
             Read a BAM/SAM/CRAM file and identify reads with excessive
             clipping.
         '''
-        self.r1_fq = gzip.open(self.fq1, mode='wt')
-        self.r2_fq = gzip.open(self.fq2, mode='wt')
+        self._mate_fetched = set() #prevent fetching reciprocal mates
+                                   # when using regions
+        if self.targets:
+            for region in self.targets:
+                self.logger.info("Parsing region {}".format(region))
+                self._process_reads(region)
+        else:
+            self._process_reads()
+        del self._mate_fetched
+        self.bamfile.close()
+        self.r1_fq.close()
+        self.r2_fq.close()
+
+    def _process_reads(self, region=None):
         candidate_qnames = set()
         pair_tracker = dict()
         n = 0
-        for read in self.bamfile.fetch(until_eof=True):
+        kwargs = {}
+        if region is None:
+            kwargs['until_eof'] = True
+        else:
+            kwargs['region'] = str(region)
+        for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
                 self.logger.info("{} records read. At pos {}:{}" .format(n, 
@@ -288,22 +422,21 @@ class BamAnalyzer(object):
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
                                        'Exiting.')
-                if (read.next_reference_id != read.reference_id or 
-                    abs(read.next_reference_start - read.reference_start) > 
-                    self.max_pair_distance):
+                if self._should_fetch_mate(read, read_name, region):
                     # we need to fetch mates if very far away to prevent
                     # storing too many reads while waiting to encounter their
                     # mates (but this is too slow to do for all reads) 
-                    if read.is_read1: 
-                        try:
-                            read2 = self.bamfile.mate(read)
-                            if (self.check_read_clipping(read) or 
-                                self.check_read_clipping(read2)):
-                                #one of pair is clipped
-                                self.output_pair(read, read2)
-                        except ValueError:
-                            self.logger.warn("Mate not found for {}"
-                                                            .format(read_name))
+                    try:
+                        read2 = self.bamfile.mate(read)
+                        if region is not None:
+                            self._mate_fetched.add(read_name)
+                        if (self.check_read_clipping(read) or 
+                            self.check_read_clipping(read2)):
+                            #one of pair is clipped
+                            self.output_pair(read, read2)
+                    except ValueError:
+                        self.logger.warn("Mate not found for {}"
+                                                        .format(read_name))
                 else:
                     if read_name in candidate_qnames:
                         self.output_pair(read, pair_tracker[read_name])
@@ -336,10 +469,26 @@ class BamAnalyzer(object):
             self.logger.warning("{} unpaired candidate reads remaining after "
                                 .format(len(candidate_qnames)) + "finished " +
                                 "parsing input BAM file.")
-        self.bamfile.close()
-        self.r1_fq.close()
-        self.r2_fq.close()
-            
+
+    def _should_fetch_mate(self, read, read_name, region):
+        if region is not None and read_name in self._mate_fetched:
+            return False
+        if read.next_reference_id != read.reference_id:
+            # if parsing til eof only fetch mates of first in pair so as not to
+            # waste memory on self._mate_fetched
+            return region is not None or read.is_read1
+        elif (abs(read.next_reference_start - read.reference_start) > 
+              self.max_pair_distance):
+            #if parsing til eof only fetch mates of first in pair
+            return region is not None or read.is_read1
+        elif region is not None:
+            if read.next_reference_start > region.end:
+                return True
+            #problem - we can't guarantee mate read length, so determining
+            #if it overlaps region.start is impossible if it starts before it
+            if read.next_reference_start < region.start:
+                return True
+        return False
 
     def score_read(self, read):
         score = 0
@@ -400,3 +549,61 @@ class BamAnalyzer(object):
         if match:
             return match.group(1)
         return query_name
+
+
+class GenomicInterval(object):
+    ''' Simple class for representing a genomic interval. '''
+
+    __slots__ = ['contig', 'start', 'end']
+
+    def __init__(self, contig, start, end):
+        ''' 
+            Args:
+                contig: Name of contig/chromosome (string)
+
+                start:  Start coordinate (int).
+
+                end:    End coordinate (int). A ValueError will be 
+                        raised if this is smaller than start.
+        '''
+        self.contig = contig
+        self.start = start
+        self.end = end
+        if start > end:
+            raise ValueError("GenomicInterval start can not be greater than " + 
+                            "end (for interval {}:{}-{})"
+                            .format(contig, start, end))
+    
+    def __str__(self):
+        return self.contig + ':' + str(self.start) + '-' + str(self.end)
+
+    def __eq__(self, other):
+        return (self.contig == other.contig and self.start == other.start and 
+               self.end == other.end)
+
+    def __ne__(self, other):
+        return (self.contig != other.contig or self.start != other.start or
+               self.end != other.end)
+
+    def __lt__(self, other):
+        return (self.contig < other.contig or 
+               (self.contig == other.contig and 
+               (self.start < other.start or self.start == other.start and 
+                self.end < other.end)))
+
+    def __le__(self, other):
+        return (self.contig < other.contig or 
+               (self.contig == other.contig and self.end <= other.end))
+
+    def __gt__(self, other):
+        return (self.contig > other.contig or 
+               (self.contig == other.contig and 
+               (self.start > other.start or self.start == other.start and 
+                self.end > other.end)))
+
+    def __ge__(self, other):
+        return (self.contig > other.contig or 
+               (self.contig == other.contig and self.start >= other.start))
+
+
+
