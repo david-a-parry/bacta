@@ -192,9 +192,11 @@ class BamAnalyzer(object):
         seen_contigs = set()
         region = None
         prev_var = None
+        var_count = 0
         for rec in vfile.fetch():
             # create intervals based on variant pos plus self.flanks, merging
             # any overlapping intervals
+            var_count += 1
             start = rec.pos - self.flanks
             end = rec.pos + self.flanks
             if region is None:
@@ -223,10 +225,26 @@ class BamAnalyzer(object):
                     region = GenomicInterval(rec.contig, start, end)
             prev_var = rec
         self.targets.append(region)
+        self.logger.info("Identified {:,} non-overlapping ({:,} bp) regions " 
+                         .format(len(self.targets), self._get_targets_length()) 
+                         +"from {:,} variants in VCF input.".format(var_count))
+
+    def _get_targets_length(self):
+        ''' 
+            Calculates length of target intervals, which should be 
+            non-overlapping.
+        '''
+        length = 0;
+        for t in self.targets:
+            length+= 1 + t.end - t.start
+        return length
 
     def _parse_regions(self, regions):
         self.targets.extend(self._region_strings_to_lists(regions))
         self._merge_targets()
+        self.logger.info("Identified {:,} total non-overlapping regions"
+                         .format(len(self.targets)) + " ({:,} bp)." 
+                         .format(self._get_targets_length()))
 
     def _merge_targets(self):
         merged = []
