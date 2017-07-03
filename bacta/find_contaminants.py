@@ -242,7 +242,7 @@ class BamAnalyzer(object):
     def _parse_regions(self, regions):
         self.targets.extend(self._region_strings_to_lists(regions))
         self._merge_targets()
-        self.logger.info("Identified {:,} total non-overlapping regions"
+        self.logger.info("Processing {:,} total non-overlapping regions"
                          .format(len(self.targets)) + " ({:,} bp)." 
                          .format(self._get_targets_length()))
 
