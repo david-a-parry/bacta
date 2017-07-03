@@ -444,17 +444,31 @@ class BamAnalyzer(object):
                     # we need to fetch mates if very far away to prevent
                     # storing too many reads while waiting to encounter their
                     # mates (but this is too slow to do for all reads) 
-                    try:
-                        read2 = self.bamfile.mate(read)
-                        if region is not None:
-                            self._mate_fetched.add(read_name)
-                        if (self.check_read_clipping(read) or 
-                            self.check_read_clipping(read2)):
-                            #one of pair is clipped
-                            self.output_pair(read, read2)
-                    except ValueError:
-                        self.logger.warn("Mate not found for {}"
-                                                        .format(read_name))
+                    if read.has_tag('MC'):
+                        # already got mate cigar string - check before fetching
+                        # this is a standard tag, should not need to check type
+                        mcigar = read.get_tag('MC')
+                        if self.check_read_clipping(read, mate_cigar=mcigar):
+                            try:
+                                read2 = self.bamfile.mate(read)
+                                self.output_pair(read, read2)
+                                if region is not None:
+                                    self._mate_fetched.add(read_name)
+                            except ValueError:
+                                self.logger.warn("Mate not found for {}"
+                                                            .format(read_name))
+                    else:
+                        try:
+                            read2 = self.bamfile.mate(read)
+                            if region is not None:
+                                self._mate_fetched.add(read_name)
+                            if (self.check_read_clipping(read) or 
+                                self.check_read_clipping(read2)):
+                                #one of pair is clipped
+                                self.output_pair(read, read2)
+                        except ValueError:
+                            self.logger.warn("Mate not found for {}"
+                                                            .format(read_name))
                 else:
                     if read_name in candidate_qnames:
                         self.output_pair(read, pair_tracker[read_name])
@@ -516,28 +530,56 @@ class BamAnalyzer(object):
                              .format(read_name, read.cigarstring, score)) 
         return score
 
-    def check_read_clipping(self, read):
+    def check_read_clipping(self, read, mate_cigar=None):
+        ''' 
+            Returns True if read is clipped greater than 
+            min_fraction_clipped or min_bases_clipped. If cigarstring 
+            for mate is provided, returns True if mate is clipped 
+            greater than min_fraction_clipped or min_bases_clipped.
+
+            Args:
+                read:   A pysam.AlignedSegment object representing a 
+                        single read. The cigar string will be read if 
+                        available to determine the extent of soft/hard
+                        clipping.
+
+                mate_cigar:
+                        Optional cigar string for mate (e.g. as provided
+                        by the standard 'MC' tag. If provided, this 
+                        function will return True if either the read or
+                        mate cigar indicate clipping above the threhold.
+                
+        '''
+        if read.cigartuples is not None: #check if mapped instead?
+            if self._check_cigar_tuple_clipping(read.cigartuples):
+                return True
+        if mate_cigar is not None:
+            mcts = self.cigar_scorer.cigarstring_to_tuples(mate_cigar)
+            return self._check_cigar_tuple_clipping(mcts)
+        return False
+
+    def _check_cigar_tuple_clipping(self, cts):
         ''' 
             Returns True if read is clipped greater than 
             min_fraction_clipped or min_bases_clipped.
         '''
         clipping = 0
-        if read.cigartuples is not None: #check if mapped instead?
-            for c in read.cigartuples:
-                if c[0] >= 4 and c[0] <= 5:
-                    clipping += c[1]
-            if clipping:
-                if (self.min_bases_clipped is not None and 
-                    clipping >= self.min_bases_clipped):
+        length = 0
+        for c in cts:
+            if c[0] >= 4 and c[0] <= 5:
+                #SOFT or HARD clip
+                clipping += c[1]
+                length += c[1]
+            elif c[0] < 2 or c[0] >= 7 and c[0] <= 8:
+                #MATCH, INS, EQUAL or DIFF
+                length += c[1]
+        if clipping:
+            if (self.min_bases_clipped is not None and 
+                clipping >= self.min_bases_clipped):
+                return True
+            else:
+                if float(clipping)/length >= self.min_fraction_clipped:
                     return True
-                else:
-                    l = read.infer_read_length()
-                    self.logger.debug("Read {}: cigar = {}, length = {},"
-                                      .format(read.query_name, 
-                                              read.cigarstring, 
-                                      l) + " clip = {}" .format(clipping))
-                    if float(clipping)/l >= self.min_fraction_clipped:
-                        return True
         return False
 
     def read_to_fastq(self, read, fh):
