@@ -336,50 +336,63 @@ class BamAnalyzer(object):
         dash = '-' #subprocess doesn't seem to like '-' passed as a string
         samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
                         stdin=PIPE, bufsize=-1)
-        with Popen(args, bufsize=-1, stdout=PIPE) as bwamem:
-            for alignment in bwamem.stdout:
-                samwrite.stdin.write(alignment)
-                alignment = alignment.decode(sys.stdout.encoding)
-                if alignment[0] == '@': #header
-                    continue
-                split = alignment.split()
-                flag = int(split[1])
-                if flag & 256 or flag & 2048: #not primary/supplementary 
-                    continue
-                old_cigar = ''
-                old_pos = ''
-                for tag in split[:10:-1]:
-                    match = prev_cigar_re.match(tag)
-                    if match:
-                        old_cigar = match.group(1)
-                        #tags were added with old cigar first - bail
-                        break
-                    match = prev_pos_re.match(tag)
-                    if match:
-                        old_pos = match.group(1)
-                score = self.cigar_scorer.score_cigarstring(split[5])
-                old_score = self.cigar_scorer.score_cigarstring(old_cigar)
-                if self.paired:
-                    if split[0] in pairs:
-                        (p_split, p_score, p_old_score, p_old_cigar, 
-                         p_old_pos) = pairs[split[0]]
-                        if (score + p_score >= self.min_aligned_score *2 and
-                            score + p_score > old_score + p_old_score + 
-                            self.min_score_diff):
-                            self.write_contam_summary(contam_out, score, 
-                                                      old_score, split, 
-                                                      old_cigar, old_pos) 
-                            self.write_contam_summary(contam_out, p_score, 
-                                                      p_old_score, p_split, 
-                                                      p_old_cigar, p_old_pos) 
-                        del pairs[split[0]]
-                    else:
-                        pairs[split[0]] = (split, score, old_score, old_cigar, 
-                                           old_pos)
+        bwamem = Popen(args, bufsize=-1, stdout=PIPE)
+        nparsed = 0
+        for alignment in bwamem.stdout:
+            samwrite.stdin.write(alignment)
+            alignment = alignment.decode(sys.stdout.encoding)
+            if alignment[0] == '@': #header
+                continue
+            nparsed += 1
+            split = alignment.split()
+            flag = int(split[1])
+            if flag & 256 or flag & 2048: #not primary/supplementary 
+                continue
+            old_cigar = ''
+            old_pos = ''
+            for tag in split[:10:-1]:
+                match = prev_cigar_re.match(tag)
+                if match:
+                    old_cigar = match.group(1)
+                    #tags were added with old cigar first - bail
+                    break
+                match = prev_pos_re.match(tag)
+                if match:
+                    old_pos = match.group(1)
+            score = self.cigar_scorer.score_cigarstring(split[5])
+            old_score = self.cigar_scorer.score_cigarstring(old_cigar)
+            if self.paired:
+                if split[0] in pairs:
+                    (p_split, p_score, p_old_score, p_old_cigar, 
+                     p_old_pos) = pairs[split[0]]
+                    if (score + p_score >= self.min_aligned_score *2 and
+                        score + p_score > old_score + p_old_score + 
+                        self.min_score_diff):
+                        self.write_contam_summary(contam_out, score, 
+                                                  old_score, split, 
+                                                  old_cigar, old_pos) 
+                        self.write_contam_summary(contam_out, p_score, 
+                                                  p_old_score, p_split, 
+                                                  p_old_cigar, p_old_pos) 
+                    del pairs[split[0]]
                 else:
-                    self.write_contam_summary(contam_out, score, old_score, 
-                                              split, old_cigar, old_pos)
+                    pairs[split[0]] = (split, score, old_score, old_cigar, 
+                                       old_pos)
+            else:
+                self.write_contam_summary(contam_out, score, old_score, 
+                                          split, old_cigar, old_pos)
         samwrite.stdin.close()
+        bwamem.stdout.close()
+        bexit = bwamem.wait(3)
+        sexit = samwrite.wait(3)
+        if bexit > 0:
+            sys.exit("ERROR: bwa command failed with exit code {}"
+                     .format(bexit))
+        if sexit > 0:
+            sys.exit("ERROR: samtools command failed with exit code {}"
+                     .format(sexit))
+        self.logger.debug("Finished bwa mem run - {} reads parsed."
+                          .format(nparsed))
 
     def write_contam_summary(self, fh, score, old_score, record, old_cigar, 
                              old_pos):
