@@ -30,7 +30,7 @@ class BamAnalyzer(object):
     def __init__(self, bam, ref, output=None, contaminants=None, 
                 bwa=None, samtools=None, min_fraction_clipped=0.2, 
                 min_bases_clipped=None, min_score_diff=30, min_aligned_score=50,
-                fastqs=None, tmp=None, max_pair_distance=1000000, paired=None, 
+                fastqs=None, tmp=None, max_pair_distance=None, paired=None, 
                 regions=[], vcf=None, flanks=500, quiet=False, debug=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
@@ -93,12 +93,15 @@ class BamAnalyzer(object):
 
                 max_pair_distance:
                         For speed, reads are stored and analyzed with 
-                        their mate unless creater than this distance 
-                        apart from each other in the genome. Increase 
-                        this value to favour speed at the expense of 
-                        memory and decrease this value to favour memory
-                        conservation over speed. Default=1000000.
-                
+                        their mate unless greater than this distance 
+                        apart from each other in the genome, in which 
+                        case the mate is fetched (which is slow). A 
+                        larger value for this option favours speed at 
+                        the expense of memory while lower values will 
+                        use less memory but result in slower parsing.
+                        Default=None (i.e. mates are only fetched if on
+                        another contig).
+
                 paired: Expect paired end reads if True, single end 
                         reads if False. If None, then will work it out 
                         on the fly. 
