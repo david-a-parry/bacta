@@ -23,6 +23,7 @@ from .reverse_complement import reverse_complement
 #    B   BAM_CBACK   9
 
 _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")  
+__version__ = '0.0.1'
 
 class BamAnalyzer(object):
 
@@ -41,7 +42,7 @@ class BamAnalyzer(object):
                 ref:    Reference fasta file for potentially 
                         contaminating sequences.
 
-                output: Output filename. Default=input + _bacta.bam.
+                output: Cleaned BAM output filename. 
 
                 contaminants:
                         Prefix for contaminant output files. Defaults to 
@@ -100,9 +101,11 @@ class BamAnalyzer(object):
                 
                 paired: Expect paired end reads if True, single end 
                         reads if False. If None, then will work it out 
-                        on the fly.
+                        on the fly. 
+            
 
         '''
+        self.commandline = str.join(" ", sys.argv)
         self.bam = bam
         self.bmode = 'rb'
         if bam.endswith(('.sam', '.SAM')):
@@ -114,8 +117,6 @@ class BamAnalyzer(object):
             raise RuntimeError('--ref argument "{}" does not ' .format(ref) + 
                                'exist or is not a file')
         self.ref = ref
-        if output is None:
-            output = os.path.splitext(bam)[0] + "_bacta.bam"
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
@@ -137,7 +138,7 @@ class BamAnalyzer(object):
             self.fq1 = self.fastqs + '_r1.fastq.gz'
             self.fq2 = self.fastqs + '_r2.fastq.gz'
         for f in [self.output, self.c_bam, self.c_sum, self.fq1, self.fq2]:
-            if not self._is_writable(f):
+            if f is not None and not self._is_writable(f):
                 raise RuntimeError('path {} is not writeable'.format(f))
         if bwa is None:
             bwa = "bwa"
@@ -316,6 +317,55 @@ class BamAnalyzer(object):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
 
+    def clean_bam(self):
+        contam_reads = set()
+        # get read IDs for contaminants from contaminant summary file created 
+        # with  self.align_candidates
+        with open(self.c_sum, 'rt') as cfile:
+            for line in cfile:
+                if line[0] == '#':
+                    continue
+                contam_reads.add(line.split()[0])
+        if not self.bamfile.is_open():
+            self.bamfile = pysam.AlignmentFile(self.bam, self.bmode)
+        header = self.bamfile.header
+        pgid = self._get_pg_id(header)
+        header['PG'].append({'ID' : pgid, 'PN' : 'bacta.py', 
+                             'CL' : self.commandline, 'VN' : __version__})
+        outbam = pysam.AlignmentFile(self.output, "w", header=header)
+        n = 0
+        f = 0
+        for read in self.bamfile.fetch(until_eof=True):
+            n += 1
+            if not n % 10000:
+                self.logger.info("Cleaning bam: {} records read, {} records "
+                                 .format(n, f) + "filtered. At pos {}:{}" 
+                                 .format(read.reference_name, 
+                                         read.reference_start))
+            if read.query_name in contam_reads:
+                f += 1
+            else:
+                outbam.write(read)
+        self.bamfile.close()
+        outbam.close()
+        self.logger.info("\nFinished cleaning bam. {} records read, {} "
+                         .format(n, f) + "filtered")
+    
+    def _get_pg_id(self, header):
+        ''' Ensure @PG ID is unique '''
+        pg = "BACTA"
+        prog_ids = set(x['ID'] for x in header['PG'])
+        while 1:
+            if pg in prog_ids:
+                if pg == "BACTA":
+                    pg = "BACTA.1"
+                else:
+                    b,n = pg.split(".")
+                    n = int(n) + 1
+                    pg = "BACTA." + str(n)
+            else:
+                return pg
+
     def align_candidates(self):
         ''' use bwa to align candidate reads (after running read_bam).'''
         #bam_out = open as pipe to BAM self.c_bam 
@@ -336,50 +386,64 @@ class BamAnalyzer(object):
         dash = '-' #subprocess doesn't seem to like '-' passed as a string
         samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
                         stdin=PIPE, bufsize=-1)
-        with Popen(args, bufsize=-1, stdout=PIPE) as bwamem:
-            for alignment in bwamem.stdout:
-                samwrite.stdin.write(alignment)
-                alignment = alignment.decode(sys.stdout.encoding)
-                if alignment[0] == '@': #header
-                    continue
-                split = alignment.split()
-                flag = int(split[1])
-                if flag & 256 or flag & 2048: #not primary/supplementary 
-                    continue
-                old_cigar = ''
-                old_pos = ''
-                for tag in split[:10:-1]:
-                    match = prev_cigar_re.match(tag)
-                    if match:
-                        old_cigar = match.group(1)
-                        #tags were added with old cigar first - bail
-                        break
-                    match = prev_pos_re.match(tag)
-                    if match:
-                        old_pos = match.group(1)
-                score = self.cigar_scorer.score_cigarstring(split[5])
-                old_score = self.cigar_scorer.score_cigarstring(old_cigar)
-                if self.paired:
-                    if split[0] in pairs:
-                        (p_split, p_score, p_old_score, p_old_cigar, 
-                         p_old_pos) = pairs[split[0]]
-                        if (score + p_score >= self.min_aligned_score *2 and
-                            score + p_score > old_score + p_old_score + 
-                            self.min_score_diff):
-                            self.write_contam_summary(contam_out, score, 
-                                                      old_score, split, 
-                                                      old_cigar, old_pos) 
-                            self.write_contam_summary(contam_out, p_score, 
-                                                      p_old_score, p_split, 
-                                                      p_old_cigar, p_old_pos) 
-                        del pairs[split[0]]
-                    else:
-                        pairs[split[0]] = (split, score, old_score, old_cigar, 
-                                           old_pos)
+        bwamem = Popen(args, bufsize=-1, stdout=PIPE)
+        nparsed = 0
+        for alignment in bwamem.stdout:
+            samwrite.stdin.write(alignment)
+            alignment = alignment.decode(sys.stdout.encoding)
+            if alignment[0] == '@': #header
+                continue
+            nparsed += 1
+            split = alignment.split()
+            flag = int(split[1])
+            if flag & 256 or flag & 2048: #not primary/supplementary 
+                continue
+            old_cigar = ''
+            old_pos = ''
+            for tag in split[:10:-1]:
+                match = prev_cigar_re.match(tag)
+                if match:
+                    old_cigar = match.group(1)
+                    #tags were added with old cigar first - bail
+                    break
+                match = prev_pos_re.match(tag)
+                if match:
+                    old_pos = match.group(1)
+            score = self.cigar_scorer.score_cigarstring(split[5])
+            old_score = self.cigar_scorer.score_cigarstring(old_cigar)
+            if self.paired:
+                if split[0] in pairs:
+                    (p_split, p_score, p_old_score, p_old_cigar, 
+                     p_old_pos) = pairs[split[0]]
+                    if (score + p_score >= self.min_aligned_score *2 and
+                        score + p_score > old_score + p_old_score + 
+                        self.min_score_diff):
+                        self.write_contam_summary(contam_out, score, 
+                                                  old_score, split, 
+                                                  old_cigar, old_pos) 
+                        self.write_contam_summary(contam_out, p_score, 
+                                                  p_old_score, p_split, 
+                                                  p_old_cigar, p_old_pos) 
+                    del pairs[split[0]]
                 else:
-                    self.write_contam_summary(contam_out, score, old_score, 
-                                              split, old_cigar, old_pos)
+                    pairs[split[0]] = (split, score, old_score, old_cigar, 
+                                       old_pos)
+            else:
+                self.write_contam_summary(contam_out, score, old_score, 
+                                          split, old_cigar, old_pos)
+        contam_out.close()
         samwrite.stdin.close()
+        bwamem.stdout.close()
+        bexit = bwamem.wait(3)
+        sexit = samwrite.wait(3)
+        if bexit > 0:
+            sys.exit("ERROR: bwa command failed with exit code {}"
+                     .format(bexit))
+        if sexit > 0:
+            sys.exit("ERROR: samtools command failed with exit code {}"
+                     .format(sexit))
+        self.logger.debug("Finished bwa mem run - {} reads parsed."
+                          .format(nparsed))
 
     def write_contam_summary(self, fh, score, old_score, record, old_cigar, 
                              old_pos):
@@ -426,8 +490,9 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
-                self.logger.info("{} records read. At pos {}:{}" .format(n, 
-                                 read.reference_name, read.reference_start))
+                self.logger.info("Reading input: {} records read. At pos {}:{}" 
+                                 .format(n, read.reference_name, 
+                                         read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             #read_name = self.parse_read_name(read.query_name) 
