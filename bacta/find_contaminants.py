@@ -577,7 +577,8 @@ class BamAnalyzer(object):
             # if parsing til eof only fetch mates of first in pair so as not to
             # waste memory on self._mate_fetched
             return region is not None or read.is_read1
-        elif (abs(read.next_reference_start - read.reference_start) > 
+        elif (self.max_pair_distance is not None and 
+              abs(read.next_reference_start - read.reference_start) > 
               self.max_pair_distance):
             #if parsing til eof only fetch mates of first in pair
             return region is not None or read.is_read1
