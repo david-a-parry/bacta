@@ -18,8 +18,9 @@ def get_parser():
                                         potential contaminant sequences. This 
                                         file  should be indexed with BWA.''')
     optional_args.add_argument('-o', '--output', metavar='BAM', 
-                               help='''Output BAM filename. Defaults to the 
-                                       basename of the input + "_bacta.bam".
+                               help='''Write cleaned output BAM to this file. 
+                                       If specified, a new BAM file without 
+                                       contaminating reads will be created. 
                                     ''')
     optional_args.add_argument('-c', '--contaminants', metavar='PREFIX', 
                                help='''Prefix for contaminant output files. 
@@ -90,5 +91,7 @@ if __name__ == '__main__':
     try:
         runner.read_bam()
         runner.align_candidates()
+        if runner.output is not None:
+            runner.clean_bam()
     finally:
         runner.cleanup()

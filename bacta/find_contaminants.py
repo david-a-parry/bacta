@@ -23,6 +23,7 @@ from .reverse_complement import reverse_complement
 #    B   BAM_CBACK   9
 
 _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")  
+__version__ = '0.0.1'
 
 class BamAnalyzer(object):
 
@@ -41,7 +42,7 @@ class BamAnalyzer(object):
                 ref:    Reference fasta file for potentially 
                         contaminating sequences.
 
-                output: Output filename. Default=input + _bacta.bam.
+                output: Cleaned BAM output filename. 
 
                 contaminants:
                         Prefix for contaminant output files. Defaults to 
@@ -100,9 +101,11 @@ class BamAnalyzer(object):
                 
                 paired: Expect paired end reads if True, single end 
                         reads if False. If None, then will work it out 
-                        on the fly.
+                        on the fly. 
+            
 
         '''
+        self.commandline = str.join(" ", sys.argv)
         self.bam = bam
         self.bmode = 'rb'
         if bam.endswith(('.sam', '.SAM')):
@@ -114,8 +117,6 @@ class BamAnalyzer(object):
             raise RuntimeError('--ref argument "{}" does not ' .format(ref) + 
                                'exist or is not a file')
         self.ref = ref
-        if output is None:
-            output = os.path.splitext(bam)[0] + "_bacta.bam"
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
@@ -137,7 +138,7 @@ class BamAnalyzer(object):
             self.fq1 = self.fastqs + '_r1.fastq.gz'
             self.fq2 = self.fastqs + '_r2.fastq.gz'
         for f in [self.output, self.c_bam, self.c_sum, self.fq1, self.fq2]:
-            if not self._is_writable(f):
+            if f is not None and not self._is_writable(f):
                 raise RuntimeError('path {} is not writeable'.format(f))
         if bwa is None:
             bwa = "bwa"
@@ -316,6 +317,55 @@ class BamAnalyzer(object):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
 
+    def clean_bam(self):
+        contam_reads = set()
+        # get read IDs for contaminants from contaminant summary file created 
+        # with  self.align_candidates
+        with open(self.c_sum, 'rt') as cfile:
+            for line in cfile:
+                if line[0] == '#':
+                    continue
+                contam_reads.add(line.split()[0])
+        if not self.bamfile.is_open():
+            self.bamfile = pysam.AlignmentFile(self.bam, self.bmode)
+        header = self.bamfile.header
+        pgid = self._get_pg_id(header)
+        header['PG'].append({'ID' : pgid, 'PN' : 'bacta.py', 
+                             'CL' : self.commandline, 'VN' : __version__})
+        outbam = pysam.AlignmentFile(self.output, "w", header=header)
+        n = 0
+        f = 0
+        for read in self.bamfile.fetch(until_eof=True):
+            n += 1
+            if not n % 10000:
+                self.logger.info("Cleaning bam: {} records read, {} records "
+                                 .format(n, f) + "filtered. At pos {}:{}" 
+                                 .format(read.reference_name, 
+                                         read.reference_start))
+            if read.query_name in contam_reads:
+                f += 1
+            else:
+                outbam.write(read)
+        self.bamfile.close()
+        outbam.close()
+        self.logger.info("\nFinished cleaning bam. {} records read, {} "
+                         .format(n, f) + "filtered")
+    
+    def _get_pg_id(self, header):
+        ''' Ensure @PG ID is unique '''
+        pg = "BACTA"
+        prog_ids = set(x['ID'] for x in header['PG'])
+        while 1:
+            if pg in prog_ids:
+                if pg == "BACTA":
+                    pg = "BACTA.1"
+                else:
+                    b,n = pg.split(".")
+                    n = int(n) + 1
+                    pg = "BACTA." + str(n)
+            else:
+                return pg
+
     def align_candidates(self):
         ''' use bwa to align candidate reads (after running read_bam).'''
         #bam_out = open as pipe to BAM self.c_bam 
@@ -440,8 +490,9 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
-                self.logger.info("{} records read. At pos {}:{}" .format(n, 
-                                 read.reference_name, read.reference_start))
+                self.logger.info("Reading input: {} records read. At pos {}:{}" 
+                                 .format(n, read.reference_name, 
+                                         read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             #read_name = self.parse_read_name(read.query_name) 
