@@ -381,6 +381,7 @@ class BamAnalyzer(object):
             else:
                 self.write_contam_summary(contam_out, score, old_score, 
                                           split, old_cigar, old_pos)
+        contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
         bexit = bwamem.wait(3)
