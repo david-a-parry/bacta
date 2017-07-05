@@ -28,6 +28,8 @@ _cigar_score = {
 CIGAR_REGEX = re.compile("(\d+)([MIDNSHP=XB])")  
 CIGAR2CODE = dict([y, x] for x, y in enumerate("MIDNSHP=XB"))
 
+MD_REGEX = re.compile(r"([A-Za-z]+|\^[A-Za-z])")
+
 
 class CigarScorer(object):
     ''' 
@@ -104,4 +106,15 @@ class CigarScorer(object):
             if c[0] == 0 or 2 <= c[0] <= 3 or 7 <= c[0] <= 8:
                 i += c[1]
         return i
+
+    def md_mismatches(self, md_tag):
+        '''
+            Using the MD tag from an alignment, returns the number of 
+            single nucleotide mismatches.
+        '''
+        p = 0
+        for x in MD_REGEX.findall(md_tag):
+            if x[0].isalpha():
+                p += len(x)
+        return p
 

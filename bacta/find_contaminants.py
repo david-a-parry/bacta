@@ -383,6 +383,8 @@ class BamAnalyzer(object):
             pairs = dict()
         prev_cigar_re = re.compile(r'ZC:Z:(\w+)')
         prev_pos_re = re.compile(r'ZP:Z:(\w+:\d+)')
+        prev_md_re = re.compile(r'ZM:Z:(\S+)')
+        md_re = re.compile(r'MD:Z:(\S+)')
         self.logger.info("Attempting alignment of clipped reads against {} " 
                          .format(self.ref) + "using bwa.")
         self.logger.info("Command is: " + str.join(" ", args))
@@ -406,17 +408,27 @@ class BamAnalyzer(object):
                 continue
             old_cigar = ''
             old_pos = ''
+            old_md = ''
+            md = ''
             for tag in split[:10:-1]:
+                match = md_re.match(tag)
+                if match:
+                    md = match.group(1)
+                    break #MD should be before all custom tags - bail
                 match = prev_cigar_re.match(tag)
                 if match:
                     old_cigar = match.group(1)
-                    #tags were added with old cigar first - bail
-                    break
+                match = prev_md_re.match(tag)
+                if match:
+                    old_md = match.group(1)
                 match = prev_pos_re.match(tag)
                 if match:
                     old_pos = match.group(1)
             score = self.cigar_scorer.score_cigarstring(split[5])
             old_score = self.cigar_scorer.score_cigarstring(old_cigar)
+            if old_md and md:
+                score -= self.cigar_scorer.md_mismatches(md)
+                old_score -= self.cigar_scorer.md_mismatches(old_md)
             if self.paired:
                 if split[0] in pairs:
                     (p_split, p_score, p_old_score, p_old_cigar, 
@@ -724,6 +736,8 @@ class BamAnalyzer(object):
                                                (read.cigarstring or '.'),
                                                read.reference_name, 
                                                read.reference_start))
+        if read.has_tag('MD'):
+            header += "\tZM:Z:" + read.get_tag('MD')
         if read.is_reverse:
             seq = reverse_complement(read.seq)
             qual = read.qual
