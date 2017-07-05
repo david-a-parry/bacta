@@ -212,7 +212,7 @@ class BamAnalyzer(object):
                                      .format(record.contig) + "before and " + 
                                      "after contig '{}'." .format(region[0]))
                 self.targets.append(region)
-                region = GenomicInterval(rec.contig, start, end)
+                region = GenomicInterval(rec.contig, start, end, rec.pos)
                 seen_contigs.add(rec.contig)
             else:
                 if rec.pos < prev_var.pos:
@@ -245,25 +245,28 @@ class BamAnalyzer(object):
 
     def _parse_regions(self, regions):
         self.targets.extend(self._region_strings_to_lists(regions))
-        self._merge_targets()
+        self.targets = self._merge_intervals(self.targets)
         self.logger.info("Processing {:,} total non-overlapping regions"
                          .format(len(self.targets)) + " ({:,} bp)." 
                          .format(self._get_targets_length()))
 
-    def _merge_targets(self):
+    def _merge_intervals(self, intervals, flanks=0):
         merged = []
-        self.targets = sorted(self.targets)
-        prev_target = self.targets[0]
-        for i in range(1, len(self.targets)):
-            if prev_target.contig != self.targets[i].contig:
-                merged.append(prev_target)
-            elif self.targets[i].start <= prev_target.end:
-                if prev_target.end < self.targets[i].end:
-                    prev_target.end = self.targets[i].end
+        intervals = sorted(intervals)
+        prev_interval = intervals[0]
+        for i in range(1, len(intervals)):
+            if prev_interval.contig != intervals[i].contig:
+                merged.append(prev_interval)
+            elif intervals[i].start - flanks <= prev_interval.end + flanks:
+                if intervals[i].targets:
+                    prev_interval.targets.update(intervals[i].targets)
+                if prev_interval.end < intervals[i].end:
+                    prev_interval.end = intervals[i].end
             else:
-                merged.append(prev_target)
-                prev_target = self.targets[i]
-        merged.append(prev_target)
+                merged.append(prev_interval)
+                prev_interval = intervals[i]
+        merged.append(prev_interval)
+        return merged
             
     def _region_strings_to_lists(self, regions):
         reg_splitter = re.compile(r'[:\-]')
@@ -486,10 +489,13 @@ class BamAnalyzer(object):
         pair_tracker = dict()
         n = 0
         kwargs = {}
+        target_loci = None
         if region is None:
             kwargs['until_eof'] = True
         else:
             kwargs['region'] = str(region)
+            if region.targets:
+                target_loci = list(sorted(region.targets))
         for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
@@ -498,6 +504,9 @@ class BamAnalyzer(object):
                                          read.reference_start))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
+            if target_loci is not None:
+                if not self._overlaps_loci(read, target_loci):
+                    continue
             #read_name = self.parse_read_name(read.query_name) 
             read_name = read.query_name
             # do any modern aligners still keep the pair/tag on read ID?
@@ -508,51 +517,21 @@ class BamAnalyzer(object):
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
                                        'Exiting.')
-                if self._should_fetch_mate(read, read_name, region):
-                    # we need to fetch mates if very far away to prevent
-                    # storing too many reads while waiting to encounter their
-                    # mates (but this is too slow to do for all reads) 
-                    if read.has_tag('MC'):
-                        # already got mate cigar string - check before fetching
-                        # this is a standard tag, should not need to check type
-                        mcigar = read.get_tag('MC')
-                        if self.check_read_clipping(read, mate_cigar=mcigar):
-                            try:
-                                read2 = self.bamfile.mate(read)
-                                self.output_pair(read, read2)
-                                if region is not None:
-                                    self._mate_fetched.add(read_name)
-                            except ValueError:
-                                self.logger.warn("Mate not found for {}"
-                                                            .format(read_name))
-                    else:
-                        try:
-                            read2 = self.bamfile.mate(read)
-                            if region is not None:
-                                self._mate_fetched.add(read_name)
-                            if (self.check_read_clipping(read) or 
-                                self.check_read_clipping(read2)):
-                                #one of pair is clipped
-                                self.output_pair(read, read2)
-                        except ValueError:
-                            self.logger.warn("Mate not found for {}"
-                                                            .format(read_name))
-                else:
-                    if read_name in candidate_qnames:
+                if read_name in candidate_qnames:
+                    self.output_pair(read, pair_tracker[read_name])
+                    candidate_qnames.remove(read_name)
+                    del pair_tracker[read_name]
+                elif self.check_read_clipping(read):
+                    if read_name in pair_tracker:
                         self.output_pair(read, pair_tracker[read_name])
-                        candidate_qnames.remove(read_name)
-                        del pair_tracker[read_name]
-                    elif self.check_read_clipping(read):
-                        if read_name in pair_tracker:
-                            self.output_pair(read, pair_tracker[read_name])
-                            del pair_tracker[read_name]
-                        else:
-                            candidate_qnames.add(read_name)
-                            pair_tracker[read_name] = read
-                    elif read_name in pair_tracker:
                         del pair_tracker[read_name]
                     else:
+                        candidate_qnames.add(read_name)
                         pair_tracker[read_name] = read
+                elif read_name in pair_tracker:
+                    del pair_tracker[read_name]
+                else:
+                    pair_tracker[read_name] = read
                 self.logger.debug("Tracking {} pairs."
                                   .format(len(pair_tracker)))
             else: #single-end reads
@@ -565,10 +544,91 @@ class BamAnalyzer(object):
                 if self.check_read_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
         self.logger.info("Finished reading {} reads from input BAM" .format(n))
+        if region is not None and pair_tracker:
+            self._mop_up_region_pairs(pair_tracker, candidate_qnames)
         if candidate_qnames:
             self.logger.warning("{} unpaired candidate reads remaining after "
                                 .format(len(candidate_qnames)) + "finished " +
                                 "parsing input BAM file.")
+
+    def _mop_up_region_pairs(pair_dict, clipped_names):
+        ''' 
+            Fetch unencountered mates in an efficient manner and score/
+            output.
+
+            Args:
+                pair_dict:  
+                    dict of read ID to the previously encountered read.
+
+                clipped_names:
+                    read IDs for any reads that have already exceeded 
+                    clipping threshold and should be written to output.
+         '''
+        to_fetch = []
+        self.logger.info("Identifying mates for {} unpaired reads "
+                         .format(len(pair_dict) + "after parsing region"))
+        for name,read in pair_dict:
+            if name in clipped_names:
+                to_fetch.add(GenomicInterval(read.reference_name, 
+                                             read.reference_start,
+                                             read.reference_end, name))
+            elif read.has_tag('MC'):
+                # already got mate cigar string - check before fetching
+                # this is a standard tag, should not need to check type
+                mcigar = read.get_tag('MC')
+                if self.check_cigarstring_clipping(mcigar):
+                    clipped_names.add(name)
+                    to_fetch.add(GenomicInterval(read.reference_name, 
+                                                 read.reference_start,
+                                                 read.reference_end, name))
+            else:
+                to_fetch.add(GenomicInterval(read.reference_name, 
+                                             read.reference_start,
+                                             read.reference_end, name))
+        to_fetch = self._merge_intervals(to_fetch, 200)
+        for interval in to_fetch:
+            self.logger.debug("Fetching reads overlapping " + str(interval))
+            for read in self.bamfile.fetch(region=str(interval)):
+                read_name = read.query_name 
+                if read_name in interval.targets:
+                    if read_name in clipped_names:
+                        self.output_pair(read, pair_tracker[read_name])
+                        clipped_names.remove(read_name)
+                    elif self.check_read_clipping(read):
+                        self.output_pair(read, pair_tracker[read_name])
+        
+    def _infer_bounds(self, read):
+        s_off, e_off = self.cigar_scorer.get_clipped_offset(read.cigartuples)
+        start = read.reference_start - s_off
+        end = read.reference_end + e_off
+        return (start, end)
+
+    def _overlaps_loci(read, target_loci):
+        start,end = self._infer_bounds(read)
+        for locus in target_loci:
+            #contig is guaranteed to be same for read and target_loci
+            if start <= locus and end > locus:
+                return True
+            if read.is_paired:
+                #want to avoid fetching mate (slow)
+                if read.has_tag('MC'):
+                    # this is a standard tag, should not need to check type
+                    mctups = self.cigar_scorer.cigarstring_to_tuples(
+                                                            read.get_tag('MC'))
+                    s_off, e_off = self.cigar_scorer.get_clipped_offset(mctups)
+                    start = read.next_reference_start - s_off
+                    end = (self.cigar_scorer.get_aligned_length(mctups) + 
+                           start + e_off)
+                    if start <= locus and end > locus:
+                        return True
+                else:
+                    # in absence of MC tag we'll have to make a guess and fix 
+                    # any unpaired overlapping reads using _mop_up_region_pairs
+                    start = read.next_reference_start
+                    end = start + read.infer_read_length
+                    if start <= locus and end > locus:
+                        return True
+        return False
 
     def _should_fetch_mate(self, read, read_name, region):
         if region is not None and read_name in self._mate_fetched:
@@ -623,10 +683,17 @@ class BamAnalyzer(object):
             if self._check_cigar_tuple_clipping(read.cigartuples):
                 return True
         if mate_cigar is not None:
-            mcts = self.cigar_scorer.cigarstring_to_tuples(mate_cigar)
-            return self._check_cigar_tuple_clipping(mcts)
+            return self.check_cigarstring_clipping(mate_cigar)
         return False
 
+    def check_cigarstring_clipping(self, cigar):
+        ''' 
+            Performs the same function as check_read_clipping but 
+            operates directly on the cigarstring.
+        '''
+        cts = self.cigar_scorer.cigarstring_to_tuples(cigar)
+        return self._check_cigar_tuple_clipping(mcts)
+        
     def _check_cigar_tuple_clipping(self, cts):
         ''' 
             Returns True if read is clipped greater than 
@@ -635,11 +702,11 @@ class BamAnalyzer(object):
         clipping = 0
         length = 0
         for c in cts:
-            if c[0] >= 4 and c[0] <= 5:
+            if 4 <= c[0] <= 5:
                 #SOFT or HARD clip
                 clipping += c[1]
                 length += c[1]
-            elif c[0] < 2 or c[0] >= 7 and c[0] <= 8:
+            elif c[0] < 2 or 7 <= c[0] <= 8:
                 #MATCH, INS, EQUAL or DIFF
                 length += c[1]
         if clipping:
@@ -683,9 +750,9 @@ class BamAnalyzer(object):
 class GenomicInterval(object):
     ''' Simple class for representing a genomic interval. '''
 
-    __slots__ = ['contig', 'start', 'end']
+    __slots__ = ['contig', 'start', 'end', 'targets']
 
-    def __init__(self, contig, start, end):
+    def __init__(self, contig, start, end, target=None):
         ''' 
             Args:
                 contig: Name of contig/chromosome (string)
@@ -694,10 +761,18 @@ class GenomicInterval(object):
 
                 end:    End coordinate (int). A ValueError will be 
                         raised if this is smaller than start.
+
+                target: One or multiple target positions within the 
+                        start and end coordinates. These are stored as
+                        a set in the targets property.
+
         '''
         self.contig = contig
         self.start = start
         self.end = end
+        self.targets = set()
+        if target is not None:
+            self.targets.update(target)
         if start > end:
             raise ValueError("GenomicInterval start can not be greater than " + 
                             "end (for interval {}:{}-{})"
