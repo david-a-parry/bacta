@@ -123,11 +123,15 @@ class BamAnalyzer(object):
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
-        if (self.output is not None and 
-            not self.output.endswith((".bam", ".BAM"))):
-            self.output += '.bam'
         self.c_bam = contaminants + '.bam'
         self.c_sum = contaminants + '_summary.txt'
+        if (self.output is not None):
+            if not self.output.endswith((".bam", ".BAM")):
+                self.output += '.bam'
+            if self.c_bam == self.output:
+                sys.exit("ERROR: --contaminants bam output and cleaned bam "
+                         "--output have the same name ('{}'). Please ensure "
+                         .format(self.c_bam) + "output file names are unique.")
         self.min_fraction_clipped = min_fraction_clipped
         self.min_bases_clipped = min_bases_clipped
         self.min_score_diff = min_score_diff
