@@ -512,6 +512,7 @@ class BamAnalyzer(object):
         cached = 0
         kwargs = {}
         target_loci = None
+        prev_chrom = None
         if region is None:
             kwargs['until_eof'] = True
         else:
@@ -527,14 +528,22 @@ class BamAnalyzer(object):
                 self.logger.debug("Tracking {} pairs in RAM, {} reads cached "
                                   .format(len(pair_tracker), cached) + 
                                   "to disk.")
-            if read.is_secondary or read.is_supplementary or read.is_duplicate: 
+            if read.is_secondary or read.is_supplementary:
+                continue
+            #read_name = self.parse_read_name(read.query_name) 
+            read_name = read.query_name
+            # do any modern aligners still keep the pair/tag on read ID?
+            if read.is_duplicate: 
+                if read_name in pair_tracker: 
+                    #if mate is unmapped, mate  won't be flagged as dup
+                    del pair_tracker[read_name]
                 continue
             if target_loci is not None:
                 if not self._overlaps_loci(read, target_loci):
                     continue
-            #read_name = self.parse_read_name(read.query_name) 
-            read_name = read.query_name
-            # do any modern aligners still keep the pair/tag on read ID?
+            if read.reference_name != prev_chrom:
+                prev_chrom = read.reference_name
+                #TODO - clear pair_tracker
             if read.is_paired:
                 if self.paired is None:
                     self.paired = True
