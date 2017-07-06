@@ -352,8 +352,8 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(until_eof=True):
             n += 1
             if not n % 10000:
-                self.logger.info("Cleaning bam: {} records read, {} records "
-                                 .format(n, f) + "filtered. At pos {}:{}" 
+                self.logger.info("Cleaning bam: {:,} records read, {:,} records "
+                                 .format(n, f) + "filtered. At pos {}:{:,}" 
                                  .format(read.reference_name, 
                                          read.reference_start))
             if read.query_name in contam_reads:
@@ -362,7 +362,7 @@ class BamAnalyzer(object):
                 outbam.write(read)
         self.bamfile.close()
         outbam.close()
-        self.logger.info("\nFinished cleaning bam. {} records read, {} "
+        self.logger.info("\nFinished cleaning bam. {:,} records read, {:,} "
                          .format(n, f) + "filtered")
     
     def _get_pg_id(self, header):
@@ -522,10 +522,10 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
-                self.logger.info("Reading input: {} records read. At pos {}:{}" 
+                self.logger.info("Reading input: {:,} records read. At pos {}:{:,}" 
                                  .format(n, read.reference_name, 
                                          read.reference_start))
-                self.logger.debug("Tracking {} pairs in RAM, {} reads cached "
+                self.logger.debug("Tracking {:,} pairs in RAM, {:,} reads cached "
                                   .format(len(pair_tracker), cached) + 
                                   "to disk.")
             if read.is_secondary or read.is_supplementary:
@@ -578,13 +578,14 @@ class BamAnalyzer(object):
                 if self.paired is None:
                     self.paired = False
                 elif self.paired:
-                    self.logger.warn("Skipping unpaired read '{}' at {}:{}"
+                    self.logger.warn("Skipping unpaired read '{}' at {}:{:,}"
                                      .format(read_name, read.reference_name,
                                              read.reference_start))
                     continue
                 if self.check_read_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
-        self.logger.info("Finished reading {} reads from input BAM" .format(n))
+        self.logger.info("Finished reading {:,} reads from input BAM" 
+                         .format(n))
         if self._bam_cache is not None:
             self._bam_cache.close()
             self._process_bam_cache()
@@ -611,10 +612,11 @@ class BamAnalyzer(object):
         for read in tmp_bam.fetch(until_eof=True):
             n += 1
             if not n % 10000:
-                self.logger.info("Reading cache: {} records read. At pos {}:{}" 
-                                 .format(n, read.reference_name, 
+                self.logger.info("Reading cache: {:,} records read. "
+                                 .format(n) + "At pos {}:{:,}"  
+                                 .format(read.reference_name, 
                                          read.reference_start))
-                self.logger.debug("Tracking {} cached pairs in RAM"
+                self.logger.debug("Tracking {:,} cached pairs in RAM"
                                   .format(len(pair_tracker)))
             read_name = read.query_name
             if read_name in candidate_qnames:
