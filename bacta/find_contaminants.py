@@ -541,9 +541,11 @@ class BamAnalyzer(object):
             if target_loci is not None:
                 if not self._overlaps_loci(read, target_loci):
                     continue
-            if read.reference_name != prev_chrom:
-                prev_chrom = read.reference_name
-                #TODO - clear pair_tracker
+            if read.reference_id != prev_chrom: 
+                # use refernce_id not reference_name to prevent ValueError for 
+                # unmapped reads at end of file
+                prev_chrom = read.reference_id 
+                #TODO - clear pair_tracker?
             if read.is_paired:
                 if self.paired is None:
                     self.paired = True
