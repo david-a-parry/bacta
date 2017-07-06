@@ -328,6 +328,8 @@ class BamAnalyzer(object):
     def cleanup(self):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
+        if self._bam_cache:
+            os.remove(self._bam_cache.filename.decode())
 
     def clean_bam(self):
         contam_reads = set()
@@ -505,7 +507,9 @@ class BamAnalyzer(object):
     def _process_reads(self, region=None):
         candidate_qnames = set()
         pair_tracker = dict()
+        self._bam_cache  = None #write pairs on diff chromosomes to this file
         n = 0
+        cached = 0
         kwargs = {}
         target_loci = None
         if region is None:
@@ -520,8 +524,9 @@ class BamAnalyzer(object):
                 self.logger.info("Reading input: {} records read. At pos {}:{}" 
                                  .format(n, read.reference_name, 
                                          read.reference_start))
-                self.logger.debug("Tracking {} pairs."
-                                  .format(len(pair_tracker)))
+                self.logger.debug("Tracking {} pairs in RAM, {} reads cached "
+                                  .format(len(pair_tracker), cached) + 
+                                  "to disk.")
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             if target_loci is not None:
@@ -533,6 +538,8 @@ class BamAnalyzer(object):
             if read.is_paired:
                 if self.paired is None:
                     self.paired = True
+                    if region is None:
+                        self._bam_cache = self._get_tmp_bam()
                 elif not self.paired:
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
@@ -541,7 +548,73 @@ class BamAnalyzer(object):
                     self.output_pair(read, pair_tracker[read_name])
                     candidate_qnames.remove(read_name)
                     del pair_tracker[read_name]
-                elif self.check_read_clipping(read):
+                else:
+                    store, is_clipped = self._should_store_is_clipped(read)
+                    if read.reference_id != read.next_reference_id:
+                        if store:
+                            self._bam_cache.write(read)
+                            cached += 1
+                    elif is_clipped:
+                        if read_name in pair_tracker:
+                            self.output_pair(read, pair_tracker[read_name])
+                            del pair_tracker[read_name]
+                        else:
+                            candidate_qnames.add(read_name)
+                            pair_tracker[read_name] = read
+                    elif read_name in pair_tracker:
+                        del pair_tracker[read_name]
+                    else:#first encountered of pair
+                        pair_tracker[read_name] = read
+            else: #single-end reads
+                if self.paired is None:
+                    self.paired = False
+                elif self.paired:
+                    self.logger.warn("Skipping unpaired read '{}' at {}:{}"
+                                     .format(read_name, read.reference_name,
+                                             read.reference_start))
+                    continue
+                if self.check_read_clipping(read):
+                    self.read_to_fastq(read, self.r1_fq)
+        self.logger.info("Finished reading {} reads from input BAM" .format(n))
+        if self._bam_cache is not None:
+            self._bam_cache.close()
+            self._process_bam_cache()
+        if region is not None and pair_tracker:
+            self._mop_up_region_pairs(pair_tracker, candidate_qnames)
+        if candidate_qnames:
+            self.logger.warning("{} unpaired candidate reads remaining after "
+                                .format(len(candidate_qnames)) + "finished " +
+                                "parsing input BAM file.")
+
+    def _process_bam_cache(self):
+        ''' 
+            Identify reads with excessive clipping in self._bam_cache.
+            self._bam_cache should only contain paired reads where each 
+            mate is on a different contig. Have already skipped 
+            supplementary/secondary reads.
+        '''
+        fn = self._bam_cache.filename.decode()
+        tmp_bam = pysam.AlignmentFile(fn, 'rb')
+        candidate_qnames = set()
+        pair_tracker = dict()
+        n = 0
+        self.logger.info("Processing cached reads...")
+        for read in tmp_bam.fetch(until_eof=True):
+            n += 1
+            if not n % 10000:
+                self.logger.info("Reading cache: {} records read. At pos {}:{}" 
+                                 .format(n, read.reference_name, 
+                                         read.reference_start))
+                self.logger.debug("Tracking {} cached pairs in RAM"
+                                  .format(len(pair_tracker)))
+            read_name = read.query_name
+            if read_name in candidate_qnames:
+                self.output_pair(read, pair_tracker[read_name])
+                candidate_qnames.remove(read_name)
+                del pair_tracker[read_name]
+            else:
+                store, is_clipped = self._should_store_is_clipped(read)
+                if is_clipped:
                     if read_name in pair_tracker:
                         self.output_pair(read, pair_tracker[read_name])
                         del pair_tracker[read_name]
@@ -550,24 +623,39 @@ class BamAnalyzer(object):
                         pair_tracker[read_name] = read
                 elif read_name in pair_tracker:
                     del pair_tracker[read_name]
-                else:
+                else:#first encountered of pair
                     pair_tracker[read_name] = read
-            else: #single-end reads
-                if self.paired is None:
-                    self.paired = False
-                elif self.paired:
-                    raise RuntimeError('Mixed paired/unpaired reads can not ' +
-                                       'be handled by this program yet. ' + 
-                                       'Exiting.')
-                if self.check_read_clipping(read):
-                    self.read_to_fastq(read, self.r1_fq)
-        self.logger.info("Finished reading {} reads from input BAM" .format(n))
-        if region is not None and pair_tracker:
-            self._mop_up_region_pairs(pair_tracker, candidate_qnames)
-        if candidate_qnames:
-            self.logger.warning("{} unpaired candidate reads remaining after "
-                                .format(len(candidate_qnames)) + "finished " +
-                                "parsing input BAM file.")
+        tmp_bam.close()
+        os.remove(fn)
+        self._bam_cache = None
+
+    def _get_tmp_bam(self):
+        ''' 
+            Returns a writeable AlignmentFile with a path created by
+            tempfile.mkstemp, using self.bamfile as a template.
+        '''
+        (foo, tmp_bam) = tempfile.mkstemp(suffix='.bam', dir=self.tmp)
+        return pysam.AlignmentFile(tmp_bam, "w", template=self.bamfile)
+
+    def _should_store_is_clipped(self, read):
+        ''' 
+            For reads with mate on another chromosome, if we have mate 
+            cigar and neither read or mate are over clipping threshold,
+            return False. Otherwise, return True.
+        '''
+        store = True
+        is_clipped = False
+        if read.mate_is_unmapped:
+            if self.check_read_clipping(read):
+                is_clipped = True
+            else:
+                store = False
+        elif read.has_tag('MC'):
+            if self.check_read_clipping(read, read.get_tag('MC')):
+                is_clipped = True
+            else:
+                store = False
+        return (store, is_clipped)
 
     def _mop_up_region_pairs(self, pair_dict, clipped_names):
         ''' 
