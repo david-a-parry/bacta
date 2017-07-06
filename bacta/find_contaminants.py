@@ -123,6 +123,9 @@ class BamAnalyzer(object):
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
+        if (self.output is not None and 
+            not self.output.endswith((".bam", ".BAM"))):
+            self.output += '.bam'
         self.c_bam = contaminants + '.bam'
         self.c_sum = contaminants + '_summary.txt'
         self.min_fraction_clipped = min_fraction_clipped
@@ -251,12 +254,15 @@ class BamAnalyzer(object):
                          .format(self._get_targets_length()))
 
     def _merge_intervals(self, intervals, flanks=0):
+        if not intervals:
+            return [] 
         merged = []
         intervals = sorted(intervals)
         prev_interval = intervals[0]
         for i in range(1, len(intervals)):
             if prev_interval.contig != intervals[i].contig:
                 merged.append(prev_interval)
+                prev_interval = intervals[i]
             elif intervals[i].start - flanks <= prev_interval.end + flanks:
                 if intervals[i].targets:
                     prev_interval.targets.update(intervals[i].targets)
@@ -514,6 +520,8 @@ class BamAnalyzer(object):
                 self.logger.info("Reading input: {} records read. At pos {}:{}" 
                                  .format(n, read.reference_name, 
                                          read.reference_start))
+                self.logger.debug("Tracking {} pairs."
+                                  .format(len(pair_tracker)))
             if read.is_secondary or read.is_supplementary or read.is_duplicate: 
                 continue
             if target_loci is not None:
@@ -544,8 +552,6 @@ class BamAnalyzer(object):
                     del pair_tracker[read_name]
                 else:
                     pair_tracker[read_name] = read
-                self.logger.debug("Tracking {} pairs."
-                                  .format(len(pair_tracker)))
             else: #single-end reads
                 if self.paired is None:
                     self.paired = False
@@ -563,7 +569,7 @@ class BamAnalyzer(object):
                                 .format(len(candidate_qnames)) + "finished " +
                                 "parsing input BAM file.")
 
-    def _mop_up_region_pairs(pair_dict, clipped_names):
+    def _mop_up_region_pairs(self, pair_dict, clipped_names):
         ''' 
             Fetch unencountered mates in an efficient manner and score/
             output.
@@ -577,45 +583,63 @@ class BamAnalyzer(object):
                     clipping threshold and should be written to output.
          '''
         to_fetch = []
-        self.logger.info("Identifying mates for {} unpaired reads "
-                         .format(len(pair_dict) + "after parsing region"))
-        for name,read in pair_dict:
+        self.logger.info("{:,} unpaired reads after parsing region"
+                         .format(len(pair_dict)) )
+        for name,read in pair_dict.items():
             if name in clipped_names:
-                to_fetch.add(GenomicInterval(read.reference_name, 
-                                             read.reference_start,
-                                             read.reference_end, name))
+                to_fetch.append(GenomicInterval(read.reference_name, 
+                                                read.reference_start,
+                                                read.reference_end or 
+                                                    read.reference_start, 
+                                                name))
             elif read.has_tag('MC'):
                 # already got mate cigar string - check before fetching
                 # this is a standard tag, should not need to check type
                 mcigar = read.get_tag('MC')
                 if self.check_cigarstring_clipping(mcigar):
                     clipped_names.add(name)
-                    to_fetch.add(GenomicInterval(read.reference_name, 
-                                                 read.reference_start,
-                                                 read.reference_end, name))
+                    to_fetch.append(GenomicInterval(read.reference_name, 
+                                                    read.reference_start,
+                                                    read.reference_end or 
+                                                        read.reference_start, 
+                                                    name))
             else:
-                to_fetch.add(GenomicInterval(read.reference_name, 
-                                             read.reference_start,
-                                             read.reference_end, name))
+                to_fetch.append(GenomicInterval(read.reference_name, 
+                                                read.reference_start,
+                                                read.reference_end or 
+                                                    read.reference_start, 
+                                                name))
+        self.logger.info("{:,} unpaired reads (potentially) over clipping "
+                         .format(len(to_fetch)) + "threshold to fetch.")
         to_fetch = self._merge_intervals(to_fetch, 200)
+        got = 0
+        clp = 0
         for interval in to_fetch:
             self.logger.debug("Fetching reads overlapping " + str(interval))
             for read in self.bamfile.fetch(region=str(interval)):
                 read_name = read.query_name 
                 if read_name in interval.targets:
+                    got += 1
+                    interval.targets.remove(read_name)
                     if read_name in clipped_names:
-                        self.output_pair(read, pair_tracker[read_name])
+                        self.output_pair(read, pair_dict[read_name])
                         clipped_names.remove(read_name)
+                        clp += 1
                     elif self.check_read_clipping(read):
-                        self.output_pair(read, pair_tracker[read_name])
+                        self.output_pair(read, pair_dict[read_name])
+                        clp += 1
+        self.logger.info("Found {} previously unpaired mates, {} over clipping"
+                         .format(got, clp) + " threshold.")
         
     def _infer_bounds(self, read):
+        if read.cigartuples is None: #unmapped
+            return (0, 0)
         s_off, e_off = self.cigar_scorer.get_clipped_offset(read.cigartuples)
         start = read.reference_start - s_off
         end = read.reference_end + e_off
         return (start, end)
 
-    def _overlaps_loci(read, target_loci):
+    def _overlaps_loci(self, read, target_loci):
         start,end = self._infer_bounds(read)
         for locus in target_loci:
             #contig is guaranteed to be same for read and target_loci
@@ -637,7 +661,7 @@ class BamAnalyzer(object):
                     # in absence of MC tag we'll have to make a guess and fix 
                     # any unpaired overlapping reads using _mop_up_region_pairs
                     start = read.next_reference_start
-                    end = start + read.infer_read_length
+                    end = start + read.infer_read_length()
                     if start <= locus and end > locus:
                         return True
         return False
@@ -704,7 +728,7 @@ class BamAnalyzer(object):
             operates directly on the cigarstring.
         '''
         cts = self.cigar_scorer.cigarstring_to_tuples(cigar)
-        return self._check_cigar_tuple_clipping(mcts)
+        return self._check_cigar_tuple_clipping(cts)
         
     def _check_cigar_tuple_clipping(self, cts):
         ''' 
@@ -786,7 +810,10 @@ class GenomicInterval(object):
         self.end = end
         self.targets = set()
         if target is not None:
-            self.targets.update(target)
+            try:
+                self.targets.add(target)
+            except TypeError:
+                self.targets.update(target)
         if start > end:
             raise ValueError("GenomicInterval start can not be greater than " + 
                             "end (for interval {}:{}-{})"
