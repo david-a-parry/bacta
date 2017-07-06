@@ -340,6 +340,10 @@ class BamAnalyzer(object):
                 if line[0] == '#':
                     continue
                 contam_reads.add(line.split()[0])
+        if not self.contam_reads:
+            self.logger.warn("No candidate reads for cleaning - skipping bam" +
+                             " cleaning.")
+            return
         if not self.bamfile.is_open():
             self.bamfile = pysam.AlignmentFile(self.bam, self.bmode)
         header = self.bamfile.header
