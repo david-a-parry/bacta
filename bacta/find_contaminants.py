@@ -546,8 +546,11 @@ class BamAnalyzer(object):
             # do any modern aligners still keep the pair/tag on read ID?
             if read.is_duplicate: 
                 if read_name in pair_tracker: 
-                    #if mate is unmapped, mate  won't be flagged as dup
+                    # if mate is unmapped, mate won't be flagged as dup
                     del pair_tracker[read_name]
+                    # read might be in candidate_qnames due to mate cigar
+                    if read_name in candidate_qnames:
+                        candidate_qnames.remove(read_name)
                 continue
             if target_loci is not None:
                 if not self._overlaps_loci(read, target_loci):
@@ -572,7 +575,7 @@ class BamAnalyzer(object):
                     del pair_tracker[read_name]
                 else:
                     store, is_clipped = self._should_store_is_clipped(read)
-                    if not self.no_caching and 
+                    if (not self.no_caching and 
                        read.reference_id != read.next_reference_id):
                         if store:
                             self._bam_cache.write(read)
