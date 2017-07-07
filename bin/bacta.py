@@ -81,6 +81,15 @@ def get_parser():
                                        information.''')
     optional_args.add_argument('--debug', action='store_true', 
                                help='''Output debugging information.''')
+    optional_args.add_argument('--no_caching', action='store_true', 
+                               help='''Do not cache any reads to disk and hold 
+                                       all as yet unpaired reads in memory. By 
+                                       default, reads with a mate mapped to 
+                                       another chomosome are cached to disk and 
+                                       processed after reading the input file. 
+                                       Set this option to True to disable this 
+                                       caching at the expense of more RAM 
+                                       usage.''')
 
     return parser
 

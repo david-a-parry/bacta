@@ -30,8 +30,8 @@ class BamAnalyzer(object):
     def __init__(self, bam, ref, output=None, contaminants=None, 
                 bwa=None, samtools=None, min_fraction_clipped=0.2, 
                 min_bases_clipped=None, min_score_diff=30, min_aligned_score=50,
-                fastqs=None, tmp=None, max_pair_distance=None, paired=None, 
-                regions=[], vcf=None, flanks=500, quiet=False, debug=False):
+                fastqs=None, tmp=None, paired=None, regions=[], vcf=None, 
+                flanks=500, quiet=False, debug=False, no_caching=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -91,21 +91,17 @@ class BamAnalyzer(object):
                         specified, the system default temporary 
                         directory will be used.
 
-                max_pair_distance:
-                        For speed, reads are stored and analyzed with 
-                        their mate unless greater than this distance 
-                        apart from each other in the genome, in which 
-                        case the mate is fetched (which is slow). A 
-                        larger value for this option favours speed at 
-                        the expense of memory while lower values will 
-                        use less memory but result in slower parsing.
-                        Default=None (i.e. mates are only fetched if on
-                        another contig).
-
                 paired: Expect paired end reads if True, single end 
                         reads if False. If None, then will work it out 
                         on the fly. 
-            
+
+                no_caching:
+                        Do not cache any reads to disk and hold all as
+                        yet unpaired reads in memory. By default, reads
+                        with a mate mapped to another chomosome are
+                        cached to disk and processed after reading the
+                        input file. Set this option to True to disable
+                        this caching at the expense of more RAM usage.
 
         '''
         self.commandline = str.join(" ", sys.argv)
@@ -137,8 +133,8 @@ class BamAnalyzer(object):
         self.min_score_diff = min_score_diff
         self.min_aligned_score  = min_aligned_score 
         self.tmp = tmp
+        self.no_caching = no_caching
         self.fastqs = fastqs
-        self.max_pair_distance = max_pair_distance
         self.paired = paired
         if fastqs is None:
             tmpdir =  tempfile.mkdtemp(prefix="bacta_fastq", dir=self.tmp)
@@ -360,10 +356,10 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(until_eof=True):
             n += 1
             if not n % 10000:
+                coord = self._get_read_coord(read)
                 self.logger.info("Cleaning bam: {:,} records read, {:,} "
                                  .format(n, f) + "records filtered. At pos " +
-                                 "{}:{:,}" .format(read.reference_name, 
-                                                   read.reference_start))
+                                 coord)
             if read.query_name in contam_reads:
                 f += 1
             else:
@@ -387,6 +383,13 @@ class BamAnalyzer(object):
                     pg = "BACTA." + str(n)
             else:
                 return pg
+
+    def _get_read_coord(self, read):
+        if read.reference_id > -1:
+            coord = "{}:{:,}".format(read.reference_name, read.reference_start)
+        else:
+            coord = "*/*"
+        return coord
 
     def align_candidates(self):
         ''' use bwa to align candidate reads (after running read_bam).'''
@@ -530,9 +533,9 @@ class BamAnalyzer(object):
         for read in self.bamfile.fetch(**kwargs):
             n += 1
             if not n % 10000:
-                self.logger.info("Reading input: {:,} records read. At pos {}:{:,}" 
-                                 .format(n, read.reference_name, 
-                                         read.reference_start))
+                coord = self._get_read_coord(read)
+                self.logger.info("Reading input: {:,} records read. At pos {}"
+                                 .format(n, coord))
                 self.logger.debug("Tracking {:,} pairs in RAM, {:,} reads cached "
                                   .format(len(pair_tracker), cached) + 
                                   "to disk.")
@@ -557,7 +560,7 @@ class BamAnalyzer(object):
             if read.is_paired:
                 if self.paired is None:
                     self.paired = True
-                    if region is None:
+                    if region is None and not self.no_caching:
                         self._bam_cache = self._get_tmp_bam()
                 elif not self.paired:
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
@@ -569,7 +572,8 @@ class BamAnalyzer(object):
                     del pair_tracker[read_name]
                 else:
                     store, is_clipped = self._should_store_is_clipped(read)
-                    if read.reference_id != read.next_reference_id:
+                    if not self.no_caching and 
+                       read.reference_id != read.next_reference_id):
                         if store:
                             self._bam_cache.write(read)
                             cached += 1
@@ -588,9 +592,9 @@ class BamAnalyzer(object):
                 if self.paired is None:
                     self.paired = False
                 elif self.paired:
-                    self.logger.warn("Skipping unpaired read '{}' at {}:{:,}"
-                                     .format(read_name, read.reference_name,
-                                             read.reference_start))
+                    coord = self._get_read_coord(read)
+                    self.logger.warn("Skipping unpaired read '{}' at {}"
+                                     .format(read_name, coord))
                     continue
                 if self.check_read_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
@@ -622,10 +626,9 @@ class BamAnalyzer(object):
         for read in tmp_bam.fetch(until_eof=True):
             n += 1
             if not n % 10000:
-                self.logger.info("Reading cache: {:,} records read. "
-                                 .format(n) + "At pos {}:{:,}"  
-                                 .format(read.reference_name, 
-                                         read.reference_start))
+                coord = self._get_read_coord(read)
+                self.logger.info("Reading cache: {:,} records read. At pos {}"
+                                 .format(n, coord))
                 self.logger.debug("Tracking {:,} cached pairs in RAM"
                                   .format(len(pair_tracker)))
             read_name = read.query_name
@@ -775,27 +778,6 @@ class BamAnalyzer(object):
                         return True
         return False
 
-    def _should_fetch_mate(self, read, read_name, region):
-        if region is not None and read_name in self._mate_fetched:
-            return False
-        if read.next_reference_id != read.reference_id:
-            # if parsing til eof only fetch mates of first in pair so as not to
-            # waste memory on self._mate_fetched
-            return region is not None or read.is_read1
-        elif (self.max_pair_distance is not None and 
-              abs(read.next_reference_start - read.reference_start) > 
-              self.max_pair_distance):
-            #if parsing til eof only fetch mates of first in pair
-            return region is not None or read.is_read1
-        elif region is not None:
-            if read.next_reference_start > region.end:
-                return True
-            #problem - we can't guarantee mate read length, so determining
-            #if it overlaps region.start is impossible if it starts before it
-            if read.next_reference_start < region.start:
-                return True
-        return False
-
     def score_read(self, read):
         score = 0
         if read.cigartuples is not None: #check if mapped instead?
@@ -865,10 +847,10 @@ class BamAnalyzer(object):
 
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
-        header = ('@{} ZC:Z:{}\tZP:Z:{}:{}'.format(read_name, 
+        coord = self._get_read_coord(read)
+        header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, 
                                                (read.cigarstring or '.'),
-                                               read.reference_name, 
-                                               read.reference_start))
+                                               coord))
         if read.has_tag('MD'):
             header += "\tZM:Z:" + read.get_tag('MD')
         if read.is_reverse:
