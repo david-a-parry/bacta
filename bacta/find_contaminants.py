@@ -370,7 +370,7 @@ class BamAnalyzer(object):
                 outbam.write(read)
         self.bamfile.close()
         outbam.close()
-        self.logger.info("\nFinished cleaning bam. {:,} records read, {:,} "
+        self.logger.info("Finished cleaning bam. {:,} records read, {:,} "
                          .format(n, f) + "filtered")
     
     def _get_pg_id(self, header):
