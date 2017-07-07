@@ -555,11 +555,30 @@ class BamAnalyzer(object):
             if target_loci is not None:
                 if not self._overlaps_loci(read, target_loci):
                     continue
-            if read.reference_id != prev_chrom: 
+            if read.reference_id != prev_chrom and not self.no_caching: 
+                # clearing pair_tracker will free up RAM in the case of 
+                # malformed BAM files such as those processed with some 
+                # versions of bcbio containing duplicated unmapped reads with 
+                # mapped mates. For well formed BAMs pair_tracker and 
+                # candidate_qnames should already be empty.
+                if pair_tracker:
+                    contig = '*'
+                    try:
+                        contig = self.bamfile.get_reference_name(prev_chrom)
+                    except ValueError:
+                        pass
+                    self.logger.warn("Clearing {} unpaired reads at end of "  
+                                     .format(len(pair_tracker)) + "contig " + 
+                                     contig)
+                    pair_tracker.clear()
+                    if candidate_qnames:
+                        self.logger.warn("Clearing {} unmatched clipped reads "
+                                         .format(len(candidate_qnames)) + 
+                                        "at end of contig " + contig)
+                        candidate_qnames.clear()
                 # use refernce_id not reference_name to prevent ValueError for 
                 # unmapped reads at end of file
                 prev_chrom = read.reference_id 
-                #TODO - clear pair_tracker?
             if read.is_paired:
                 if self.paired is None:
                     self.paired = True
