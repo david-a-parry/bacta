@@ -354,16 +354,16 @@ class BamAnalyzer(object):
         pgid = self._get_pg_id(header)
         header['PG'].append({'ID' : pgid, 'PN' : 'bacta.py', 
                              'CL' : self.commandline, 'VN' : __version__})
-        outbam = pysam.AlignmentFile(self.output, "w", header=header)
+        outbam = pysam.AlignmentFile(self.output, "wb", header=header)
         n = 0
         f = 0
         for read in self.bamfile.fetch(until_eof=True):
             n += 1
             if not n % 10000:
-                self.logger.info("Cleaning bam: {:,} records read, {:,} records "
-                                 .format(n, f) + "filtered. At pos {}:{:,}" 
-                                 .format(read.reference_name, 
-                                         read.reference_start))
+                self.logger.info("Cleaning bam: {:,} records read, {:,} "
+                                 .format(n, f) + "records filtered. At pos " +
+                                 "{}:{:,}" .format(read.reference_name, 
+                                                   read.reference_start))
             if read.query_name in contam_reads:
                 f += 1
             else:
