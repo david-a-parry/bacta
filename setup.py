@@ -8,7 +8,11 @@ setup(
     description = "TO DO",
     author = "David A. Parry",
     author_email = "gantzgraf@github.com",
-    url = "",
+    url = "https://github.com/gantzgraf/bacta",
+    license='GPLv3',
+    install_requires=[
+          'pysam',
+      ],
     scripts = glob.glob( "bin/*.py"),
     classifiers = [
         "Programming Language :: Python :: 3",
