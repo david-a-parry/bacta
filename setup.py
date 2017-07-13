@@ -13,7 +13,7 @@ setup(
     install_requires=[
           'pysam',
       ],
-    scripts = glob.glob( "bin/*.py"),
+    scripts = ["bin/bacta"],
     classifiers = [
         "Programming Language :: Python :: 3",
         "Development Status :: 1 - Planning",
