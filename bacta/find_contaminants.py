@@ -384,9 +384,14 @@ class BamAnalyzer(object):
             else:
                 return pg
 
-    def _get_read_coord(self, read):
+    def _get_read_coord(self, read, no_commas=False):
+        com = ','
+        if no_commas:
+            com = ''
         if read.reference_id > -1:
-            coord = "{}:{:,}".format(read.reference_name, read.reference_start)
+            coord = "{}:{:{n_format}}".format(read.reference_name, 
+                                              read.reference_start, 
+                                              n_format=com)
         else:
             coord = "*/*"
         return coord
@@ -877,7 +882,7 @@ class BamAnalyzer(object):
 
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
-        coord = self._get_read_coord(read)
+        coord = self._get_read_coord(read, True)
         header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, 
                                                (read.cigarstring or '.'),
                                                coord))
