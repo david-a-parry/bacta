@@ -355,7 +355,7 @@ class BamAnalyzer(object):
         f = 0
         for read in self.bamfile.fetch(until_eof=True):
             n += 1
-            if not n % 10000:
+            if not n % 100000:
                 coord = self._get_read_coord(read)
                 self.logger.info("Cleaning bam: {:,} records read, {:,} "
                                  .format(n, f) + "records filtered. At pos " +
@@ -532,7 +532,7 @@ class BamAnalyzer(object):
                 target_loci = list(sorted(region.targets))
         for read in self.bamfile.fetch(**kwargs):
             n += 1
-            if not n % 10000:
+            if not n % 100000:
                 coord = self._get_read_coord(read)
                 self.logger.info("Reading input: {:,} records read. At pos {}"
                                  .format(n, coord))
@@ -647,7 +647,7 @@ class BamAnalyzer(object):
         self.logger.info("Processing cached reads...")
         for read in tmp_bam.fetch(until_eof=True):
             n += 1
-            if not n % 10000:
+            if not n % 100000:
                 coord = self._get_read_coord(read)
                 self.logger.info("Reading cache: {:,} records read. At pos {}"
                                  .format(n, coord))
@@ -685,9 +685,15 @@ class BamAnalyzer(object):
 
     def _should_store_is_clipped(self, read):
         ''' 
-            For reads with mate on another chromosome, if we have mate 
-            cigar and neither read or mate are over clipping threshold,
-            return False. Otherwise, return True.
+            See if we have enough information to determine whether read
+            should be stored or not. Returns two booleans - the first 
+            indicates whether the read should be stored prior to 
+            encountering its mate, the second indicates whether the read
+            is clipped beyond the clipping threshold.
+
+            If the MC (mate cigar) tag is present, we can determine 
+            whether the mate is not clipped and thus can be ignored if
+            this read is also not clipped.
         '''
         store = True
         is_clipped = False
@@ -701,6 +707,8 @@ class BamAnalyzer(object):
                 is_clipped = True
             else:
                 store = False
+        elif self.check_read_clipping(read):
+            is_clipped = True
         return (store, is_clipped)
 
     def _mop_up_region_pairs(self, pair_dict, clipped_names):
