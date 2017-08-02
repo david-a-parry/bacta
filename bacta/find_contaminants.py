@@ -25,12 +25,14 @@ from .reverse_complement import reverse_complement
 _qname_re = re.compile(r"""(\S+)(#\d+)?(/\[1-2])?""")  
 __version__ = '0.0.1'
 
+
 class BamAnalyzer(object):
 
     def __init__(self, bam, ref, output=None, contaminants=None, 
                 bwa=None, samtools=None, min_fraction_clipped=0.2, 
-                min_bases_clipped=None, min_score_diff=30, min_aligned_score=50,
-                fastqs=None, tmp=None, paired=None, regions=[], vcf=None, 
+                min_bases_clipped=None, min_expect_diff=1000, 
+                min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
+                regions=[], vcf=None, 
                 flanks=500, quiet=False, debug=False, no_caching=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
@@ -80,6 +82,13 @@ class BamAnalyzer(object):
                         contaminant. This overrides the 
                         --min_fraction_clipped argument.
 
+                min_expect_diff:
+                        TODO
+                        Default=1000
+                min_aligned_score:
+                        TODO
+                        Default=50 
+
                 fastqs: Prefix for fastq files created from reads that
                         are tested for contamination. By default 
                         temporary files are created and deleted after
@@ -112,10 +121,12 @@ class BamAnalyzer(object):
         elif bam.endswith(('.cram', '.CRAM')):
             self.bmode = 'rc'
         self.bamfile = pysam.AlignmentFile(bam, self.bmode)
+        self.bam_ref_length = sum(self.bamfile.lengths)
         if not os.path.isfile(ref):
             raise RuntimeError('--ref argument "{}" does not ' .format(ref) + 
                                'exist or is not a file')
         self.ref = ref
+        self.ref_length = self._length_from_fai(ref)
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
@@ -130,7 +141,7 @@ class BamAnalyzer(object):
                          .format(self.c_bam) + "output file names are unique.")
         self.min_fraction_clipped = min_fraction_clipped
         self.min_bases_clipped = min_bases_clipped
-        self.min_score_diff = min_score_diff
+        self.min_expect_diff = min_expect_diff
         self.min_aligned_score  = min_aligned_score 
         self.tmp = tmp
         self.no_caching = no_caching
@@ -174,6 +185,24 @@ class BamAnalyzer(object):
         if self.targets:
             self._check_targets()
 
+    def _length_from_fai(self, fasta):
+        l = 0
+        fai = fasta + '.fai'
+        if not os.path.exists(fai):
+            sys.exit("ERROR: could not find fasta index ('{}') for fasta "
+                     .format(fai) + "reference. Please index ('samtools faidx"+
+                     " {}') before running this program." .format(fasta))
+        with open(fai, 'r') as fh:
+            for line in fh:
+                try:
+                    l += int(line.split()[1])
+                except ValueError:
+                    sys.exit("ERROR: Fasta index '{}' appears to be malformed."
+                             .format(fai) + " Could not determine sequence " + 
+                             "length for line:\n{}".format(line))
+        return l
+        
+            
     def _check_targets(self):
         ldict = dict(zip( self.bamfile.references, self.bamfile.lengths))
         for gi in self.targets:
@@ -405,15 +434,16 @@ class BamAnalyzer(object):
         if self.paired:
             args.append(self.fq2)
             pairs = dict()
-        prev_cigar_re = re.compile(r'ZC:Z:(\w+)')
+        prev_cigar_re = re.compile(r'ZC:Z:(\S+)')
         prev_pos_re = re.compile(r'ZP:Z:(\w+:\d+)')
         prev_md_re = re.compile(r'ZM:Z:(\S+)')
         md_re = re.compile(r'MD:Z:(\S+)')
         self.logger.info("Attempting alignment of clipped reads against {} " 
                          .format(self.ref) + "using bwa.")
         self.logger.info("Command is: " + str.join(" ", args))
-        contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "CIGAR",
-                                         "OLDCIGAR", "OLDPOS", "CONTIG", "POS", 
+        contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "EXPECT",
+                                         "OLDEXPECT", "CIGAR", "OLDCIGAR", 
+                                         "OLDPOS", "CONTIG", "POS", 
                                          "MATE_CONTIG", "MATE_POS")) + "\n")
         dash = '-' #subprocess doesn't seem to like '-' passed as a string
         samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
@@ -453,26 +483,32 @@ class BamAnalyzer(object):
             if old_md and md:
                 score -= self.cigar_scorer.md_mismatches(md)
                 old_score -= self.cigar_scorer.md_mismatches(old_md)
+            read_length = len(split[9])
+            e = self._calc_expect(score, read_length, self.ref_length)
+            old_e = self._calc_expect(old_score, read_length, 
+                                      self.bam_ref_length)
             if self.paired:
                 if split[0] in pairs:
-                    (p_split, p_score, p_old_score, p_old_cigar, 
+                    (p_split, p_score, p_old_score, p_e, p_old_e, p_old_cigar, 
                      p_old_pos) = pairs[split[0]]
                     if (score + p_score >= self.min_aligned_score *2 and
-                        score + p_score > old_score + p_old_score + 
-                        self.min_score_diff):
+                        (old_e * p_old_e)/(e * p_e) >= self.min_expect_diff):
                         self.write_contam_summary(contam_out, score, 
-                                                  old_score, split, 
-                                                  old_cigar, old_pos) 
+                                                  old_score, e, old_e,
+                                                  split, old_cigar, old_pos) 
                         self.write_contam_summary(contam_out, p_score, 
-                                                  p_old_score, p_split, 
-                                                  p_old_cigar, p_old_pos) 
+                                                  p_old_score, p_e, p_old_e, 
+                                                  p_split, p_old_cigar, 
+                                                  p_old_pos) 
                     del pairs[split[0]]
                 else:
-                    pairs[split[0]] = (split, score, old_score, old_cigar, 
-                                       old_pos)
+                    pairs[split[0]] = (split, score, old_score, e, old_e, 
+                                       old_cigar, old_pos)
             else:
-                self.write_contam_summary(contam_out, score, old_score, 
-                                          split, old_cigar, old_pos)
+                if (score >= self.min_aligned_score and
+                    old_e/e >= self.min_expect_diff):
+                    self.write_contam_summary(contam_out, score, old_score, e, 
+                                              old_e, split, old_cigar, old_pos)
         contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
@@ -487,8 +523,15 @@ class BamAnalyzer(object):
         self.logger.debug("Finished bwa mem run - {} reads parsed."
                           .format(nparsed))
 
-    def write_contam_summary(self, fh, score, old_score, record, old_cigar, 
-                             old_pos):
+    def _calc_expect(self, score, read_length, ref_length):
+        ''' 
+            Crude approximation of E-value which should be acceptable
+            when comparing identical sequences and long references.
+        '''
+        return read_length * ref_length * 2**-score
+
+    def write_contam_summary(self, fh, score, old_score, e, old_e, record, 
+                             old_cigar, old_pos):
         ''' Write a summary of a contaminant read to fh. '''
         if int(record[1]) & 2: #pair_mapped
             mate_coord = (record[6] if record[6] != '=' else record[2], 
@@ -498,6 +541,8 @@ class BamAnalyzer(object):
         #format is: ReadID, Score, OldScore, CIGAR, OldCigar, 
         #           OldPos, Chrom, Pos MateChrom, MatePos
         fh.write(str.join("\t", (record[0], str(score), str(old_score), 
+                                 str.format("{:g}", e), 
+                                 str.format("{:g}", old_e),
                                  record[5], old_cigar, old_pos, record[2], 
                                  record[3], mate_coord[0], mate_coord[1]))
                          + "\n")
@@ -523,7 +568,7 @@ class BamAnalyzer(object):
     def _process_reads(self, region=None):
         candidate_qnames = set()
         pair_tracker = dict()
-        self._bam_cache  = None #write pairs on diff chromosomes to this file
+        self._bam_cache = None #write pairs on diff chromosomes to this file
         n = 0
         cached = 0
         kwargs = {}
@@ -549,7 +594,7 @@ class BamAnalyzer(object):
             #read_name = self.parse_read_name(read.query_name) 
             read_name = read.query_name
             # do any modern aligners still keep the pair/tag on read ID?
-            if read.is_duplicate: 
+            if read.is_duplicate: #TODO should we ignore duplicates? maybe not
                 if read_name in pair_tracker: 
                     # if mate is unmapped, mate won't be flagged as dup
                     del pair_tracker[read_name]
@@ -884,7 +929,7 @@ class BamAnalyzer(object):
         read_name = self.parse_read_name(read.query_name)
         coord = self._get_read_coord(read, True)
         header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, 
-                                               (read.cigarstring or '.'),
+                                               (read.cigarstring or '*'),
                                                coord))
         if read.has_tag('MD'):
             header += "\tZM:Z:" + read.get_tag('MD')
