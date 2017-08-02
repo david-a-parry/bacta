@@ -71,6 +71,9 @@ def get_parser():
                                        "<prefix>_r1.fastq.gz" and 
                                        "<prefix>_r2.fastq.gz" and will persist
                                        after the program exits.''')
+    optional_args.add_argument('--ignore_dups', action='store_true',  
+                               help='''Skip checking of reads marked as 
+                                       PCR/optical duplicates''')
     optional_args.add_argument('-t', '--tmp', metavar='TMPDIR', 
                                help='''Directory to use for temporary files. 
                                        If not specified, the system default 

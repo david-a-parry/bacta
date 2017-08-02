@@ -32,8 +32,8 @@ class BamAnalyzer(object):
                 bwa=None, samtools=None, min_fraction_clipped=0.2, 
                 min_bases_clipped=None, min_expect_diff=1000, 
                 min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
-                regions=[], vcf=None, 
-                flanks=500, quiet=False, debug=False, no_caching=False):
+                regions=[], vcf=None, flanks=500, ignore_dups=False, 
+                quiet=False, debug=False, no_caching=False):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -147,6 +147,7 @@ class BamAnalyzer(object):
         self.no_caching = no_caching
         self.fastqs = fastqs
         self.paired = paired
+        self.ignore_dups = ignore_dups 
         if fastqs is None:
             tmpdir =  tempfile.mkdtemp(prefix="bacta_fastq", dir=self.tmp)
             self.fq1 = os.path.join(tmpdir, 'r1.fq.gz')
@@ -594,7 +595,7 @@ class BamAnalyzer(object):
             #read_name = self.parse_read_name(read.query_name) 
             read_name = read.query_name
             # do any modern aligners still keep the pair/tag on read ID?
-            if read.is_duplicate: #TODO should we ignore duplicates? maybe not
+            if self.ignore_dups and read.is_duplicate: 
                 if read_name in pair_tracker: 
                     # if mate is unmapped, mate won't be flagged as dup
                     del pair_tracker[read_name]
