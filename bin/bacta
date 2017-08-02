@@ -7,7 +7,8 @@ from bacta.find_contaminants import BamAnalyzer
 def get_parser():
     '''Get ArgumentParser'''
     parser = argparse.ArgumentParser(
-                  description='Identify and remove bacterial reads from BAMS.')
+                  description='Identify and remove bacterial reads from BAMS.',
+                  add_help=False)
     required_args = parser.add_argument_group('Required Arguments')
     optional_args = parser.add_argument_group('Optional Arguments')
     required_args.add_argument('-i', '--bam', '--input', required=True, 
@@ -92,6 +93,8 @@ def get_parser():
                                        Set this option to True to disable this 
                                        caching at the expense of more RAM 
                                        usage.''')
+    optional_args.add_argument('-h', '--help', action='help', 
+                               help='''show this help message and exit''')
 
     return parser
 
