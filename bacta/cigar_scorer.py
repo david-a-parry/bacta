@@ -47,7 +47,7 @@ class CigarScorer(object):
         '''
         self.logger = logging.getLogger(__name__)
         self.cig_warned = set()
-        if not self.logger.hasHandlers():
+        if not self.logger.handlers:
              self.logger.setLevel(logging_level) 
              formatter = logging.Formatter(
                         '[%(asctime)s] %(name)s - %(levelname)s - %(message)s')                                                                                                          
