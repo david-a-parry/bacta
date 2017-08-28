@@ -888,24 +888,29 @@ class BamAnalyzer(object):
                 
         '''
         if read.cigartuples is not None: #check if mapped instead?
-            if self._check_cigar_tuple_clipping(read.cigartuples):
+            md = None
+            if read.has_tag('MD'):
+                md = read.get_tag('MD')
+            if self._check_cigar_tuple_clipping(read.cigartuples, md):
                 return True
         if mate_cigar is not None:
             return self.check_cigarstring_clipping(mate_cigar)
         return False
 
-    def check_cigarstring_clipping(self, cigar):
+    def check_cigarstring_clipping(self, cigar, md_tag=None):
         ''' 
             Performs the same function as check_read_clipping but 
             operates directly on the cigarstring.
         '''
         cts = self.cigar_scorer.cigarstring_to_tuples(cigar)
-        return self._check_cigar_tuple_clipping(cts)
+        return self._check_cigar_tuple_clipping(cts, md_tag)
         
-    def _check_cigar_tuple_clipping(self, cts):
+    def _check_cigar_tuple_clipping(self, cts, md_tag=None):
         ''' 
             Returns True if read is clipped greater than 
-            min_fraction_clipped or min_bases_clipped.
+            min_fraction_clipped or min_bases_clipped. If md_tag is 
+            provided, the number of single nucleotide mismatches are 
+            also added to the number of clipped bases.
         '''
         clipping = 0
         length = 0
@@ -917,6 +922,8 @@ class BamAnalyzer(object):
             elif c[0] < 2 or 7 <= c[0] <= 8:
                 #MATCH, INS, EQUAL or DIFF
                 length += c[1]
+        if md_tag is not None:
+            clipping += self.cigar_scorer.md_mismatches(md_tag)
         if clipping:
             if (self.min_bases_clipped is not None and 
                 clipping >= self.min_bases_clipped):
