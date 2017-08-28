@@ -513,8 +513,8 @@ class BamAnalyzer(object):
         contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
-        bexit = bwamem.wait(3)
-        sexit = samwrite.wait(3)
+        bexit = bwamem.wait()#timeout not compatible with python2
+        sexit = samwrite.wait()
         if bexit > 0:
             sys.exit("ERROR: bwa command failed with exit code {}"
                      .format(bexit))
