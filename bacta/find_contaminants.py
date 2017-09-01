@@ -29,7 +29,7 @@ __version__ = '0.0.1'
 class BamAnalyzer(object):
 
     def __init__(self, bam, ref, output=None, contaminants=None, 
-                bwa=None, samtools=None, min_fraction_clipped=0.2, 
+                bwa=None, samtools=None, min_fraction_clipped=0.15, 
                 min_bases_clipped=None, min_expect_diff=1000, 
                 min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
                 regions=[], vcf=None, flanks=500, ignore_dups=False, 
@@ -73,8 +73,9 @@ class BamAnalyzer(object):
 
                 min_fraction_clipped:
                         Minimum proportion of a read that is hard or 
-                        soft-clipped in the BAM file for a read to be 
-                        analyzed as a potential contaminant. Default=0.2.
+                        soft-clipped or single nucleotide mismatch in the BAM 
+                        file for a read to be analyzed as a potential 
+                        contaminant. Default=0.15.
 
                 min_bases_clipped: 
                         Minimum number of hard or soft-clipped bases for 
@@ -85,6 +86,7 @@ class BamAnalyzer(object):
                 min_expect_diff:
                         TODO
                         Default=1000
+
                 min_aligned_score:
                         TODO
                         Default=50 

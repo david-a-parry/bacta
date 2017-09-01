@@ -50,11 +50,12 @@ def get_parser():
                                help='''Location of samtools executable. Only 
                                        required if not in your PATH.''')
     optional_args.add_argument('-m', '--min_fraction_clipped', metavar='FLOAT', 
-                               type=float, default=0.2,
+                               type=float, default=0.15,
                                help='''Minimum proportion of a read that is 
-                                       hard or soft-clipped in the BAM file
-                                       for a read to be analyzed as a potential 
-                                       contaminant. Default = 0.2''')
+                                       hard or soft-clipped or mismatch in the 
+                                       BAM file for a read to be analyzed as a 
+                                       potential contaminant. Default = 0.15'''
+                              )
     optional_args.add_argument('-n', '--min_bases_clipped', metavar='INT', 
                                type=int, default=None, 
                                help='''Minimum number of hard or soft-clipped
