@@ -7,6 +7,7 @@ import tempfile
 import gzip
 import shutil
 import logging
+from collections import defaultdict
 from .cigar_scorer import CigarScorer
 from .reverse_complement import reverse_complement
 
@@ -570,7 +571,7 @@ class BamAnalyzer(object):
 
     def _process_reads(self, region=None):
         candidate_qnames = set()
-        pair_tracker = dict()
+        pair_tracker = defaultdict(dict)
         self._bam_cache = None #write pairs on diff chromosomes to this file
         n = 0
         cached = 0
@@ -590,17 +591,23 @@ class BamAnalyzer(object):
                 self.logger.info("Reading input: {:,} records read. At pos {}"
                                  .format(n, coord))
                 self.logger.debug("Tracking {:,} pairs in RAM, {:,} reads cached "
-                                  .format(len(pair_tracker), cached) + 
+                                  .format((len(pair_tracker[1]) + 
+                                          len(pair_tracker[2])), cached) + 
                                   "to disk.")
             if read.is_secondary or read.is_supplementary:
                 continue
             #read_name = self.parse_read_name(read.query_name) 
             read_name = read.query_name
+            p = 2 #read no. of pair
+            r = 1 #read no. of this read
+            if read.is_read2:
+                p = 1
+                r = 2
             # do any modern aligners still keep the pair/tag on read ID?
             if self.ignore_dups and read.is_duplicate: 
-                if read_name in pair_tracker: 
+                if read_name in pair_tracker[p]:
                     # if mate is unmapped, mate won't be flagged as dup
-                    del pair_tracker[read_name]
+                    del pair_tracker[p][read_name]
                     # read might be in candidate_qnames due to mate cigar
                     if read_name in candidate_qnames:
                         candidate_qnames.remove(read_name)
@@ -641,10 +648,13 @@ class BamAnalyzer(object):
                     raise RuntimeError('Mixed paired/unpaired reads can not ' +
                                        'be handled by this program yet. ' + 
                                        'Exiting.')
-                if read_name in candidate_qnames:
-                    self.output_pair(read, pair_tracker[read_name])
+                if (read_name in candidate_qnames and 
+                    read_name in pair_tracker[p]):
+                    # checking pair_tracker[p] allows for problematic 
+                    # bams where unmapped reads are duplicated
+                    self.output_pair(read, pair_tracker[p][read_name])
                     candidate_qnames.remove(read_name)
-                    del pair_tracker[read_name]
+                    del pair_tracker[p][read_name]
                 else:
                     store, is_clipped = self._should_store_is_clipped(read)
                     if (not self.no_caching and 
@@ -653,16 +663,16 @@ class BamAnalyzer(object):
                             self._bam_cache.write(read)
                             cached += 1
                     elif is_clipped:
-                        if read_name in pair_tracker:
-                            self.output_pair(read, pair_tracker[read_name])
-                            del pair_tracker[read_name]
+                        if read_name in pair_tracker[p]:
+                            self.output_pair(read, pair_tracker[p][read_name])
+                            del pair_tracker[p][read_name]
                         else:
                             candidate_qnames.add(read_name)
-                            pair_tracker[read_name] = read
-                    elif read_name in pair_tracker:
-                        del pair_tracker[read_name]
+                            pair_tracker[r][read_name] = read
+                    elif read_name in pair_tracker[p]:
+                        del pair_tracker[p][read_name]
                     else:#first encountered of pair
-                        pair_tracker[read_name] = read
+                        pair_tracker[r][read_name] = read
             else: #single-end reads
                 if self.paired is None:
                     self.paired = False
@@ -779,8 +789,9 @@ class BamAnalyzer(object):
          '''
         to_fetch = []
         self.logger.info("{:,} unpaired reads after parsing region"
-                         .format(len(pair_dict)) )
-        for name,read in pair_dict.items():
+                         .format((len(pair_dict[p]) + len(pair_dict[p]))))
+        for name,read in (list(pair_dict[1].items()) + 
+                          list(pair_dict[2].items())):
             if name in clipped_names:
                 to_fetch.append(GenomicInterval(read.reference_name, 
                                                 read.reference_start,
@@ -813,15 +824,18 @@ class BamAnalyzer(object):
             self.logger.debug("Fetching reads overlapping " + str(interval))
             for read in self.bamfile.fetch(region=str(interval)):
                 read_name = read.query_name 
+                p = 1 #read no. of pair
+                if read.is_read1:
+                    p = 2
                 if read_name in interval.targets:
                     got += 1
                     interval.targets.remove(read_name)
                     if read_name in clipped_names:
-                        self.output_pair(read, pair_dict[read_name])
+                        self.output_pair(read, pair_dict[p][read_name])
                         clipped_names.remove(read_name)
                         clp += 1
                     elif self.check_read_clipping(read):
-                        self.output_pair(read, pair_dict[read_name])
+                        self.output_pair(read, pair_dict[p][read_name])
                         clp += 1
         self.logger.info("Found {} previously unpaired mates, {} over clipping"
                          .format(got, clp) + " threshold.")
