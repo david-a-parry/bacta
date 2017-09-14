@@ -945,7 +945,7 @@ class BamAnalyzer(object):
             header += "\tZM:Z:" + read.get_tag('MD')
         if read.is_reverse:
             seq = reverse_complement(read.seq)
-            qual = read.qual
+            qual = read.qual[::-1]
         else:
             seq = read.seq
             qual = read.qual
