@@ -26,6 +26,18 @@ def get_parser():
                                help='''Prefix for contaminant output files. 
                                        Defaults to the basename of the input + 
                                        "_contaminants".''')
+    optional_args.add_argument('-u', '--unaligned', action='store_true', 
+                               help='''Also test unmapped reads with unmapped 
+                                       mates (or simply unmapped reads if input
+                                       is from single-end reads).''')
+    optional_args.add_argument('-d', '--decoy_contigs', nargs='+', 
+                               metavar='CONTIG', default=[],
+                               help='''Names of decoy contigs from input BAM. 
+                                       If specified, any reads mapped to these
+                                       contigs will be tested regardless of 
+                                       clipping. For scoring purposes, these 
+                                       reads will be treated as if 
+                                       unmapped.''')
     optional_args.add_argument('-v', '--vcf', metavar='VCF', 
                                help='''VCF file of candidate variants 
                                        introduced by contamination. If provided 

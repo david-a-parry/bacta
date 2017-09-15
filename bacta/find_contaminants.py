@@ -34,7 +34,8 @@ class BamAnalyzer(object):
                 min_bases_clipped=None, min_expect_diff=1000, 
                 min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
                 regions=[], vcf=None, flanks=500, ignore_dups=False, 
-                quiet=False, debug=False, no_caching=False):
+                quiet=False, debug=False, no_caching=False, unaligned=False,
+                decoy_contigs=[]):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -115,6 +116,17 @@ class BamAnalyzer(object):
                         input file. Set this option to True to disable
                         this caching at the expense of more RAM usage.
 
+                unaligned:
+                        Also test unmapped reads with unmapped mates (or 
+                        simply unmapped reads if input is from single-end 
+                        reads).
+
+                decoy_contigs:
+                        Names of decoy contigs from input BAM. If specified, 
+                        any reads mapped to these contigs will be tested 
+                        regardless of clipping. For scoring purposes, these 
+                        reads will be treated as if unmapped.
+
         '''
         self.commandline = str.join(" ", sys.argv)
         self.bam = bam
@@ -142,6 +154,8 @@ class BamAnalyzer(object):
                 sys.exit("ERROR: --contaminants bam output and cleaned bam "
                          "--output have the same name ('{}'). Please ensure "
                          .format(self.c_bam) + "output file names are unique.")
+        self.decoys = set(decoy_contigs)
+        self.get_unaligned = unaligned
         self.min_fraction_clipped = min_fraction_clipped
         self.min_bases_clipped = min_bases_clipped
         self.min_expect_diff = min_expect_diff
@@ -628,8 +642,9 @@ class BamAnalyzer(object):
                     except ValueError:
                         pass
                     self.logger.warn("Clearing {} unpaired reads at end of "  
-                                     .format(len(pair_tracker)) + "contig " + 
-                                     contig)
+                                      .format((len(pair_tracker[1]) + 
+                                               len(pair_tracker[2]))) + 
+                                     "contig " + contig)
                     pair_tracker.clear()
                     if candidate_qnames:
                         self.logger.warn("Clearing {} unmatched clipped reads "
@@ -715,7 +730,8 @@ class BamAnalyzer(object):
                 self.logger.info("Reading cache: {:,} records read. At pos {}"
                                  .format(n, coord))
                 self.logger.debug("Tracking {:,} cached pairs in RAM"
-                                  .format(len(pair_tracker)))
+                                  .format((len(pair_tracker[1]) + 
+                                           len(pair_tracker[2]))))
             read_name = read.query_name
             if read_name in candidate_qnames:
                 self.output_pair(read, pair_tracker[read_name])
@@ -760,7 +776,12 @@ class BamAnalyzer(object):
         '''
         store = True
         is_clipped = False
-        if read.mate_is_unmapped:
+        if read.reference_id == -1: #unmapped
+            if self.get_unaligned:
+                is_clipped = True
+        elif self.decoys and read.reference_name in self.decoys:
+            is_clipped = True
+        elif read.mate_is_unmapped:
             if self.check_read_clipping(read):
                 is_clipped = True
             else:
@@ -952,9 +973,13 @@ class BamAnalyzer(object):
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
         coord = self._get_read_coord(read, True)
-        header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, 
-                                               (read.cigarstring or '*'),
-                                               coord))
+        if read.reference_id < 0:
+            cigar = '*'
+        elif self.decoys and read.reference_name in self.decoys:
+            cigar = '*'
+        else:
+            cigar = read.cigarstring or '*'
+        header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, cigar, coord))
         if read.has_tag('MD'):
             header += "\tZM:Z:" + read.get_tag('MD')
         if read.is_reverse:
