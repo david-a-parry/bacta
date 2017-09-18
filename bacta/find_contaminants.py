@@ -635,7 +635,7 @@ class BamAnalyzer(object):
                 # versions of bcbio containing duplicated unmapped reads with 
                 # mapped mates. For well formed BAMs pair_tracker and 
                 # candidate_qnames should already be empty.
-                if pair_tracker:
+                if pair_tracker[1] or pair_tracker[2]:
                     contig = '*'
                     try:
                         contig = self.bamfile.get_reference_name(prev_chrom)
@@ -720,7 +720,7 @@ class BamAnalyzer(object):
         fn = self._bam_cache.filename.decode()
         tmp_bam = pysam.AlignmentFile(fn, 'rb')
         candidate_qnames = set()
-        pair_tracker = dict()
+        pair_tracker = defaultdict(dict)
         n = 0
         self.logger.info("Processing cached reads...")
         for read in tmp_bam.fetch(until_eof=True):
@@ -733,23 +733,38 @@ class BamAnalyzer(object):
                                   .format((len(pair_tracker[1]) + 
                                            len(pair_tracker[2]))))
             read_name = read.query_name
-            if read_name in candidate_qnames:
-                self.output_pair(read, pair_tracker[read_name])
+            read_name = read.query_name
+            p = 2 #read no. of pair
+            r = 1 #read no. of this read
+            if read.is_read2:
+                p = 1
+                r = 2
+            if self.ignore_dups and read.is_duplicate: 
+                if read_name in pair_tracker[p]:
+                    # if mate is unmapped, mate won't be flagged as dup
+                    del pair_tracker[p][read_name]
+                    # read might be in candidate_qnames due to mate cigar
+                    if read_name in candidate_qnames:
+                        candidate_qnames.remove(read_name)
+                continue
+            if (read_name in candidate_qnames and 
+                read_name in pair_tracker[p]):
+                self.output_pair(read, pair_tracker[p][read_name])
                 candidate_qnames.remove(read_name)
-                del pair_tracker[read_name]
+                del pair_tracker[p][read_name]
             else:
                 store, is_clipped = self._should_store_is_clipped(read)
                 if is_clipped:
-                    if read_name in pair_tracker:
-                        self.output_pair(read, pair_tracker[read_name])
-                        del pair_tracker[read_name]
+                    if read_name in pair_tracker[p]:
+                        self.output_pair(read, pair_tracker[p][read_name])
+                        del pair_tracker[p][read_name]
                     else:
                         candidate_qnames.add(read_name)
-                        pair_tracker[read_name] = read
-                elif read_name in pair_tracker:
-                    del pair_tracker[read_name]
+                        pair_tracker[p][read_name] = read
+                elif read_name in pair_tracker[p]:
+                    del pair_tracker[p][read_name]
                 else:#first encountered of pair
-                    pair_tracker[read_name] = read
+                    pair_tracker[r][read_name] = read
         tmp_bam.close()
         os.remove(fn)
         self._bam_cache = None
