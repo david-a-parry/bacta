@@ -376,7 +376,9 @@ class BamAnalyzer(object):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
         if self._bam_cache:
-            os.remove(self._bam_cache.filename.decode())
+            for f in [self._bam_cache.filename.decode(), (collated + '.bam')]:
+                if os.path.exists(f):
+                    os.remove(f)
 
     def clean_bam(self):
         contam_reads = set()
@@ -718,7 +720,12 @@ class BamAnalyzer(object):
             supplementary/secondary reads.
         '''
         fn = self._bam_cache.filename.decode()
-        tmp_bam = pysam.AlignmentFile(fn, 'rb')
+        collated = os.path.splitext(fn)[0] + "_collated"
+        self.logger.info("Collating cached reads by read ID...")
+        pysam.collate('--output-fmt', 'BAM', fn, collated)
+        self.logger.info("Finished collating cached reads.")
+        os.remove(fn)
+        tmp_bam = pysam.AlignmentFile(collated + '.bam', 'rb')
         candidate_qnames = set()
         pair_tracker = defaultdict(dict)
         n = 0
@@ -760,13 +767,13 @@ class BamAnalyzer(object):
                         del pair_tracker[p][read_name]
                     else:
                         candidate_qnames.add(read_name)
-                        pair_tracker[p][read_name] = read
+                        pair_tracker[r][read_name] = read
                 elif read_name in pair_tracker[p]:
                     del pair_tracker[p][read_name]
                 else:#first encountered of pair
                     pair_tracker[r][read_name] = read
         tmp_bam.close()
-        os.remove(fn)
+        os.remove(collated + '.bam')
         self._bam_cache = None
 
     def _get_tmp_bam(self):
