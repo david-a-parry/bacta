@@ -34,8 +34,8 @@ class BamAnalyzer(object):
                 min_bases_clipped=None, min_expect_diff=1000, 
                 min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
                 regions=[], vcf=None, flanks=500, ignore_dups=False, 
-                quiet=False, debug=False, no_caching=False, unaligned=False,
-                decoy_contigs=[]):
+                quiet=False, debug=False, log_file=None,
+                no_caching=False, unaligned=False, decoy_contigs=[]):
         '''
             Read and identify potentially contaminating reads in a BAM 
             file according to read clipping and a reference fasta file.
@@ -188,6 +188,7 @@ class BamAnalyzer(object):
                                    'appropriate argument.')
         self.bwa = bwa
         self.samtools = samtools
+        self.log_file = log_file
         self.debug = debug
         self.quiet = quiet
         self._set_logger()
@@ -351,6 +352,11 @@ class BamAnalyzer(object):
         ch.setLevel(self.logger.level)
         ch.setFormatter(formatter)
         self.logger.addHandler(ch)
+        if self.log_file is not None:
+            fh = logging.FileHandler(self.log_file)
+            fh.setLevel(self.logger.level)
+            fh.setFormatter(formatter)
+            self.logger.addHandler(fh)
 
     def _is_writable(self, file_path):
         if not os.path.dirname(file_path):
