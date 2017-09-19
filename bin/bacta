@@ -102,9 +102,12 @@ def get_parser():
                                        default, reads with a mate mapped to 
                                        another chomosome are cached to disk and 
                                        processed after reading the input file. 
-                                       Set this option to True to disable this 
-                                       caching at the expense of more RAM 
-                                       usage.''')
+                                       This assumes your reads are sorted in 
+                                       coordinate order. Use this option to 
+                                       disable caching if your reads are sorted
+                                       or grouped by read ID rather than 
+                                       coordinate order or if RAM is not a 
+                                       limiting factor.''')
     optional_args.add_argument('-h', '--help', action='help', 
                                help='''show this help message and exit''')
 
