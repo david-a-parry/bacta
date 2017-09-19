@@ -455,7 +455,7 @@ class BamAnalyzer(object):
             args.append(self.fq2)
             pairs = dict()
         prev_cigar_re = re.compile(r'ZC:Z:(\S+)')
-        prev_pos_re = re.compile(r'ZP:Z:(\w+:\d+)')
+        prev_pos_re = re.compile(r'ZP:Z:(\S+)')
         prev_md_re = re.compile(r'ZM:Z:(\S+)')
         md_re = re.compile(r'MD:Z:(\S+)')
         self.logger.info("Attempting alignment of clipped reads against {} " 
