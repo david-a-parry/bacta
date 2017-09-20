@@ -382,7 +382,9 @@ class BamAnalyzer(object):
         if self.fastqs is None: #cleanup tmp fastqs
            shutil.rmtree(os.path.split(self.fq1)[0])
         if self._bam_cache:
-            for f in [self._bam_cache.filename.decode(), (collated + '.bam')]:
+            fn = self._bam_cache.filename.decode() 
+            collated = os.path.splitext(fn)[0] + "_collated" + '.bam'
+            for f in (fn, collated):
                 if os.path.exists(f):
                     os.remove(f)
 
