@@ -543,7 +543,7 @@ class BamAnalyzer(object):
                     del pairs[split[0]]
                 else:
                     pairs[split[0]] = (split, score, old_score, e, old_e, 
-                                       old_cigar, old_pos, mapq, old_mapq)
+                                       old_cigar, old_pos, old_mapq)
             else:
                 if (score >= self.min_aligned_score and
                     old_e/e >= self.min_expect_diff):
