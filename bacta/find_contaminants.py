@@ -445,7 +445,7 @@ class BamAnalyzer(object):
             com = ''
         if read.reference_id > -1:
             coord = "{}:{:{n_format}}".format(read.reference_name, 
-                                              read.reference_start, 
+                                              read.reference_start + 1, 
                                               n_format=com)
         else:
             coord = "*/*"
@@ -463,6 +463,7 @@ class BamAnalyzer(object):
         prev_cigar_re = re.compile(r'ZC:Z:(\S+)')
         prev_pos_re = re.compile(r'ZP:Z:(\S+)')
         prev_md_re = re.compile(r'ZM:Z:(\S+)')
+        prev_mapq_re = re.compile(r'ZQ:Z:(\S+)')
         md_re = re.compile(r'MD:Z:(\S+)')
         self.logger.info("Attempting alignment of clipped reads against {} " 
                          .format(self.ref) + "using bwa.")
@@ -470,7 +471,8 @@ class BamAnalyzer(object):
         contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "EXPECT",
                                          "OLDEXPECT", "CIGAR", "OLDCIGAR", 
                                          "OLDPOS", "CONTIG", "POS", 
-                                         "MATE_CONTIG", "MATE_POS")) + "\n")
+                                         "MATE_CONTIG", "MATE_POS", "MAPQ",
+                                         "OLD_MAPQ")) + "\n")
         dash = '-' #subprocess doesn't seem to like '-' passed as a string
         samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
                         stdin=PIPE, bufsize=-1)
@@ -489,6 +491,7 @@ class BamAnalyzer(object):
             old_cigar = ''
             old_pos = ''
             old_md = ''
+            old_mapq = ''
             md = ''
             for tag in split[:10:-1]:
                 match = md_re.match(tag)
@@ -498,12 +501,19 @@ class BamAnalyzer(object):
                 match = prev_cigar_re.match(tag)
                 if match:
                     old_cigar = match.group(1)
-                match = prev_md_re.match(tag)
-                if match:
-                    old_md = match.group(1)
+                    continue
                 match = prev_pos_re.match(tag)
                 if match:
                     old_pos = match.group(1)
+                    continue
+                match = prev_mapq_re.match(tag)
+                if match:
+                    old_mapq = match.group(1)
+                    continue
+                match = prev_md_re.match(tag)
+                if match:
+                    old_md = match.group(1)
+                    continue
             score = self.cigar_scorer.score_cigarstring(split[5])
             old_score = self.cigar_scorer.score_cigarstring(old_cigar)
             if old_md and md:
@@ -513,28 +523,31 @@ class BamAnalyzer(object):
             e = self._calc_expect(score, read_length, self.ref_length)
             old_e = self._calc_expect(old_score, read_length, 
                                       self.bam_ref_length)
+            mapq = split[4]
             if self.paired:
                 if split[0] in pairs:
                     (p_split, p_score, p_old_score, p_e, p_old_e, p_old_cigar, 
-                     p_old_pos) = pairs[split[0]]
+                     p_old_pos, p_old_mapq) = pairs[split[0]]
                     if (score + p_score >= self.min_aligned_score *2 and
                         (old_e * p_old_e)/(e * p_e) >= self.min_expect_diff):
                         self.write_contam_summary(contam_out, score, 
                                                   old_score, e, old_e,
-                                                  split, old_cigar, old_pos) 
+                                                  split, old_cigar, old_pos, 
+                                                  old_mapq)
                         self.write_contam_summary(contam_out, p_score, 
                                                   p_old_score, p_e, p_old_e, 
                                                   p_split, p_old_cigar, 
-                                                  p_old_pos) 
+                                                  p_old_pos, p_old_mapq) 
                     del pairs[split[0]]
                 else:
                     pairs[split[0]] = (split, score, old_score, e, old_e, 
-                                       old_cigar, old_pos)
+                                       old_cigar, old_pos, mapq, old_mapq)
             else:
                 if (score >= self.min_aligned_score and
                     old_e/e >= self.min_expect_diff):
                     self.write_contam_summary(contam_out, score, old_score, e, 
-                                              old_e, split, old_cigar, old_pos)
+                                              old_e, split, old_cigar, old_pos,
+                                              old_mapq)
         contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
@@ -557,7 +570,7 @@ class BamAnalyzer(object):
         return read_length * ref_length * 2**-score
 
     def write_contam_summary(self, fh, score, old_score, e, old_e, record, 
-                             old_cigar, old_pos):
+                             old_cigar, old_pos, old_mapq):
         ''' Write a summary of a contaminant read to fh. '''
         if int(record[1]) & 2: #pair_mapped
             mate_coord = (record[6] if record[6] != '=' else record[2], 
@@ -565,12 +578,13 @@ class BamAnalyzer(object):
         else:
             mate_coord = ('.', '.')
         #format is: ReadID, Score, OldScore, CIGAR, OldCigar, 
-        #           OldPos, Chrom, Pos MateChrom, MatePos
+        #           OldPos, Chrom, Pos MateChrom, MatePos, MAPQ, OldMAPQ
         fh.write(str.join("\t", (record[0], str(score), str(old_score), 
                                  str.format("{:g}", e), 
                                  str.format("{:g}", old_e),
                                  record[5], old_cigar, old_pos, record[2], 
-                                 record[3], mate_coord[0], mate_coord[1]))
+                                 record[3], mate_coord[0], mate_coord[1],
+                                 record[4], old_mapq))
                          + "\n")
 
     def read_bam(self):
@@ -901,7 +915,7 @@ class BamAnalyzer(object):
         start,end = self._infer_bounds(read)
         for locus in target_loci:
             #contig is guaranteed to be same for read and target_loci
-            if start <= locus and end > locus:
+            if start < locus and end > locus:
                 return True
             if read.is_paired:
                 #want to avoid fetching mate (slow)
@@ -920,7 +934,7 @@ class BamAnalyzer(object):
                     # any unpaired overlapping reads using _mop_up_region_pairs
                     start = read.next_reference_start
                     end = start + read.infer_read_length()
-                    if start <= locus and end > locus:
+                    if start < locus and end > locus:
                         return True
         return False
 
@@ -1001,13 +1015,15 @@ class BamAnalyzer(object):
     def read_to_fastq(self, read, fh):
         read_name = self.parse_read_name(read.query_name)
         coord = self._get_read_coord(read, True)
+        mapq = read.mapping_quality
         if read.reference_id < 0:
             cigar = '*'
         elif self.decoys and read.reference_name in self.decoys:
             cigar = '*'
         else:
             cigar = read.cigarstring or '*'
-        header = ('@{} ZC:Z:{}\tZP:Z:{}'.format(read_name, cigar, coord))
+        header = ('@{} ZC:Z:{}\tZP:Z:{}\tZQ:Z:{}'.format(read_name, cigar, 
+                                                         coord, mapq))
         if read.has_tag('MD'):
             header += "\tZM:Z:" + read.get_tag('MD')
         if read.is_reverse:
