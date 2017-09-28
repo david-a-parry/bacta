@@ -470,6 +470,7 @@ class BamAnalyzer(object):
         self.logger.info("Attempting alignment of clipped reads against {} " 
                          .format(self.ref) + "using bwa.")
         self.logger.info("Command is: " + str.join(" ", args))
+        self.logger.info("Piping output to " + self.c_bam + " via samtools.")
         contam_out.write(str.join("\t", ("#ID", "SCORE", "OLDSCORE", "EXPECT",
                                          "OLDEXPECT", "CIGAR", "OLDCIGAR", 
                                          "OLDPOS", "CONTIG", "POS", 
@@ -561,8 +562,12 @@ class BamAnalyzer(object):
         if sexit > 0:
             sys.exit("ERROR: samtools command failed with exit code {}"
                      .format(sexit))
-        self.logger.debug("Finished bwa mem run - {} reads parsed."
-                          .format(nparsed))
+        self.logger.info("Finished bwa mem run - {} reads parsed. "
+                         .format(nparsed)) 
+        self.logger.info("Alignments of all reads reaching the clip/mismatch" + 
+                         " threshold are in {}.".format(self.c_bam))
+        self.logger.info("Putative contaminant read information is in {}."
+                         .format(self.c_sum))
 
     def _calc_expect(self, score, read_length, ref_length):
         ''' 
