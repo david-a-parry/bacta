@@ -34,7 +34,7 @@ class BamAnalyzer(object):
                 min_bases_clipped=None, min_expect_diff=1000, 
                 min_aligned_score=50, fastqs=None, tmp=None, paired=None, 
                 regions=[], vcf=None, flanks=500, ignore_dups=False, 
-                quiet=False, debug=False, log_file=None,
+                threads=1, quiet=False, debug=False, log_file=None,
                 no_caching=False, unaligned=False, decoy_contigs=[]):
         '''
             Read and identify potentially contaminating reads in a BAM 
@@ -126,6 +126,10 @@ class BamAnalyzer(object):
                         any reads mapped to these contigs will be tested 
                         regardless of clipping. For scoring purposes, these 
                         reads will be treated as if unmapped.
+        
+                threads:
+                        Number of threads to use with BWA alignment step.
+                        Default=1.
 
         '''
         self.commandline = str.join(" ", sys.argv)
@@ -188,6 +192,7 @@ class BamAnalyzer(object):
                                    'appropriate argument.')
         self.bwa = bwa
         self.samtools = samtools
+        self.threads = threads
         self.log_file = log_file
         self.debug = debug
         self.quiet = quiet
@@ -462,6 +467,8 @@ class BamAnalyzer(object):
         if self.paired:
             args.append(self.fq2)
             pairs = dict()
+        if self.threads > 1:
+            args += ["-t", str(self.threads)]
         prev_cigar_re = re.compile(r'ZC:Z:(\S+)')
         prev_pos_re = re.compile(r'ZP:Z:(\S+)')
         prev_md_re = re.compile(r'ZM:Z:(\S+)')
@@ -744,7 +751,10 @@ class BamAnalyzer(object):
         fn = self._bam_cache.filename.decode()
         collated = os.path.splitext(fn)[0] + "_collated"
         self.logger.info("Collating cached reads by read ID...")
-        pysam.collate('--output-fmt', 'BAM', fn, collated)
+        args = ['--output-fmt', 'BAM', fn, collated]
+        if self.threads > 1:
+            args += ['-@', str(self.threads - 1)]
+        pysam.collate(*args)
         self.logger.info("Finished collating cached reads.")
         os.remove(fn)
         tmp_bam = pysam.AlignmentFile(collated + '.bam', 'rb')

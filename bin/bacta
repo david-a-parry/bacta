@@ -91,6 +91,9 @@ def get_parser():
                                help='''Directory to use for temporary files. 
                                        If not specified, the system default 
                                        temporary directory will be used.''')
+    optional_args.add_argument('-T', '--threads', type=int, default=1,
+                               help='''Number of threads to use for bwa 
+                                       alignment step. Default=1''')
     optional_args.add_argument('-l', '--log_file', 
                                help='''Output logging information to this file
                                        (in addition to STDERR).''')
