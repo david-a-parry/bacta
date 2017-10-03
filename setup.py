@@ -11,7 +11,7 @@ setup(
     url = "https://github.com/gantzgraf/bacta",
     license='GPLv3',
     install_requires=[
-          'pysam',
+          'pysam>=0.12.0',
       ],
     scripts = ["bin/bacta"],
     classifiers = [
