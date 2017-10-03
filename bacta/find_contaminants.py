@@ -443,6 +443,8 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
                 continue
             if check_read_clipping(read):
                 fq_writer.output_single(read)
+    if paired is None:
+        paired = False
     f_msg = "Finished reading {:,} reads from input BAM".format(n)
     if unmapped_only:
         f_msg += " for unmapped reads"
@@ -1061,11 +1063,16 @@ class BamAnalyzer(object):
         paired = sum(x['paired'] for x in results)
         fq1s = list(x['fq1'] for x in results)
         fq2s = list(x['fq2'] for x in results)
-        self._concat_fqs(fq1s, fq2s, paired)
+        cached_bams = list(x['bam_cache'] for x in results)
         if n_cached:
-            self._process_bam_cache() #will delete bam_cache after collating
+            cf1, cf2 = self._process_bam_cache(cached_bams) #deletes bam_cache after collating
+            fq1s.append(cf1)
+            fq2s.append(cf2)
         else:
-            os.remove(self.bam_cache.filename)
+            for f in cached_bams:
+                if os.path.exists(f):
+                    os.remove(f)
+        self._concat_fqs(fq1s, fq2s, paired) #deletes all tmp fastqs after cat
 
     def _add_process_args(self, args):
         for a in args:
@@ -1108,27 +1115,68 @@ class BamAnalyzer(object):
             for f in r2s:
                 os.remove(f)
 
-    def _process_bam_cache(self):
+    def collate_single_bam(self, bam):
+        collated = os.path.splitext(bam)[0] + "_collated"
+        self.logger.info("Collating cached reads by read ID...")
+        args = ['--output-fmt', 'BAM', bam, collated]
+        if self.threads > 1:
+            args += ['-@', str(self.threads - 1)]
+        pysam.collate(*args)
+        self.logger.info("Finished collating cached reads.")
+        os.remove(bam)
+        return pysam.AlignmentFile(collated + '.bam', 'rb')
+ 
+    def collate_multiple_bams(self, bams):
+        self.logger.info("Concatanating cached reads and collating by read " + 
+                         " ID using samtools")
+        dash = '-'
+        (f, collated) = tempfile.mkstemp(suffix='.collated', dir=self.tmp)
+        os.close(f)
+        os.remove(collated) #samtools will create & add .bam extension
+        cat_args = [self.samtools, 'cat'] + bams
+        col_args = [self.samtools, 'collate', '-@', str(self.threads - 1), 
+                    dash, collated]
+        self.logger.debug("Concatanating command: " + str.join(" ", cat_args))
+        self.logger.debug("Collating command: " + str.join(" ", col_args))
+        bamcat = Popen(cat_args, stdout=PIPE, bufsize=-1)
+        bamcollate = Popen(col_args, stdin=PIPE)
+        for buff in bamcat.stdout:
+            bamcollate.stdin.write(buff)
+        bamcat.stdout.close()
+        bamcollate.stdin.close()
+        cat_exit = bamcat.wait()
+        col_exit = bamcollate.wait()
+        if cat_exit > 0:
+            sys.exit("ERROR: samtools cat command failed with exit code {}"
+                     .format(cat_exit))
+        if col_exit > 0:
+            sys.exit("ERROR: samtools collate command failed with exit code {}"
+                     .format(col_exit))
+        for f in bams:
+            if os.path.exists(f):
+                os.remove(f)
+        return pysam.AlignmentFile(collated + '.bam', 'rb')
+
+    def _process_bam_cache(self, cache_bams):
         ''' 
             Identify reads with excessive clipping in self.bam_cache.
             self.bam_cache should only contain paired reads where each 
             mate is on a different contig. Have already skipped 
             supplementary/secondary reads.
         '''
-        fn = self.bam_cache.filename
-        collated = os.path.splitext(fn)[0] + "_collated"
-        self.logger.info("Collating cached reads by read ID...")
-        args = ['--output-fmt', 'BAM', fn, collated]
-        if self.threads > 1:
-            args += ['-@', str(self.threads - 1)]
-        pysam.collate(*args)
-        self.logger.info("Finished collating cached reads.")
-        os.remove(fn)
-        tmp_bam = pysam.AlignmentFile(collated + '.bam', 'rb')
+        if len(cache_bams) == 1:
+            tmp_bam = self.collate_single_bam(cache_bams[0])
+        else:
+            tmp_bam = self.collate_multiple_bams(cache_bams)
         candidate_qnames = set()
         pair_tracker = defaultdict(dict)
         n = 0
         self.logger.info("Processing cached reads...")
+        (f, tmp_fq1) = tempfile.mkstemp(suffix='.r1.fq.gz', dir=self.tmp)
+        os.close(f)
+        (f, tmp_fq2) = tempfile.mkstemp(suffix='.r2.fq.gz', dir=self.tmp)
+        os.close(f)
+        fq_writer = Read2Fastq(tmp_fq1, tmp_fq2, self.decoys)
         for read in tmp_bam.fetch(until_eof=True):
             n += 1
             if not n % 100000:
@@ -1155,17 +1203,19 @@ class BamAnalyzer(object):
                 continue
             if (read_name in candidate_qnames and 
                 read_name in pair_tracker[p]):
-                self.fq_writer.output_pair(read, pair_tracker[p][read_name])
+                fq_writer.output_pair(read, pair_tracker[p][read_name])
                 candidate_qnames.remove(read_name)
                 del pair_tracker[p][read_name]
             else:
-                store, is_clipped = should_store_is_clipped(read, cigar_scorer,
-                                                   min_frac, min_clip=min_clip, 
-                                                   decoys=decoys, 
-                                                   get_unaligned=get_unaligned)
+                store, is_clipped = should_store_is_clipped(read, 
+                                              self.cigar_scorer,
+                                              self.min_fraction_clipped,
+                                              min_clip=self.min_bases_clipped, 
+                                              decoys=self.decoys, 
+                                              get_unaligned=self.get_unaligned)
                 if is_clipped:
                     if read_name in pair_tracker[p]:
-                        self.fq_writer.output_pair(read, pair_tracker[p][read_name])
+                        fq_writer.output_pair(read, pair_tracker[p][read_name])
                         del pair_tracker[p][read_name]
                     else:
                         candidate_qnames.add(read_name)
@@ -1175,7 +1225,9 @@ class BamAnalyzer(object):
                 else:#first encountered of pair
                     pair_tracker[r][read_name] = read
         tmp_bam.close()
-        os.remove(collated + '.bam')
+        fq_writer.close()
+        os.remove(tmp_bam.filename)
+        return(tmp_fq1, tmp_fq2)
    
     def score_read(self, read):
         score = 0
