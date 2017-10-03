@@ -1091,7 +1091,7 @@ class BamAnalyzer(object):
         #        "fq2": fq_writer.fq2, "paired": paired}
         #self.bam_cache.close()
         n_cached = sum(x['n_cached'] for x in results)
-        paired = sum(x['paired'] for x in results)
+        self.paired = sum(x['paired'] for x in results)
         fq1s = list(x['fq1'] for x in results)
         fq2s = list(x['fq2'] for x in results)
         cached_bams = list(x['bam_cache'] for x in results)
@@ -1103,7 +1103,7 @@ class BamAnalyzer(object):
             for f in cached_bams:
                 if os.path.exists(f):
                     os.remove(f)
-        self._concat_fqs(fq1s, fq2s, paired) #deletes all tmp fastqs after cat
+        self._concat_fqs(fq1s, fq2s, self.paired) #deletes all tmp fastqs after cat
 
     def _add_process_args(self, args):
         for a in args:
