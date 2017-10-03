@@ -308,9 +308,10 @@ def _initialize_mp_logger(logger, loglevel, logfile=None):
         logger.addHandler(fh)
 
 def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
-                   ignore_dups=False, no_caching=False, region=None, 
-                   contig=None, decoys=None, get_unaligned=False, paired=None,
-                   unmapped_only=False, logfile=None, loglevel=logging.INFO):
+                  ignore_dups=False, no_caching=False, region=None, 
+                  contig=None, decoys=None, get_unaligned=False, paired=None,
+                  unmapped_only=False, logger=None, logfile=None, 
+                  loglevel=logging.INFO):
     ''' 
         Read BAM and output reads reaching clip/mismatch threshold
         to self.fq1 and self.fq2. Returns no. reads which have been
@@ -322,9 +323,10 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
     n = 0
     cached = 0
     cigar_scorer = CigarScorer(loglevel)
-    logger = mp.get_logger()
-    if logger.level == logging.NOTSET:
-        _initialize_mp_logger(logger, loglevel, logfile)
+    if logger is None:
+        logger = mp.get_logger()
+        if logger.level == logging.NOTSET:
+            _initialize_mp_logger(logger, loglevel, logfile)
     bf = get_bamfile(bam) #input bamfile
     cache_bamfile = get_align_output(tmp_bam, template=bf)
     fq_writer = Read2Fastq(tmp_fq1, tmp_fq2, decoys)
@@ -1009,6 +1011,12 @@ class BamAnalyzer(object):
                                  record[4], old_mapq))
                          + "\n")
 
+    def _check_bam_index(self):
+        try:
+            return self.bamfile.check_index()
+        except ValueError:
+            return False
+
     def read_bam(self):
         ''' 
             Read a BAM/SAM/CRAM file and identify reads with excessive
@@ -1021,10 +1029,32 @@ class BamAnalyzer(object):
                   "ignore_dups": self.ignore_dups,
                   "no_caching": self.no_caching, 
                   "decoys": self.decoys,
-                  "get_unaligned": self.get_unaligned}
-        
-        if self.threads > 1:
-            with mp.Pool(self.threads) as p:
+                  "get_unaligned": self.get_unaligned,
+                  "logfile": self.log_file,}
+        read_threads = self.threads
+        has_index = self._check_bam_index()
+        if self.targets and not has_index:
+            self.logger.warn("No valid index found for " + self.bam + " - " + 
+                             "an index is required for retrieval of reads by" + 
+                             "region.")
+            self.logger.warn("Attempting to index" + self.bam)
+            try:
+                pysam.index(self.bam)
+            except pysam.SamtoolsError as e:
+                sys.exit("ERROR: Could not index {}:\n{}".format(self.bam, e))
+        elif read_threads > 1 and not has_index:
+            self.logger.warn("No valid index found for " + self.bam + " - " + 
+                             "an index is required in order to use " +
+                             "multithreaded read retrieval") 
+            try:
+                pysam.index(self.bam)
+            except pysam.SamtoolsError as e:
+                self.logger.warn("ERROR: Could not index {}. Will parse "
+                                 .format(self.bam) + "reads using a single " + 
+                                 "process.")
+                read_threads = 1
+        if read_threads > 1:
+            with mp.Pool(read_threads) as p:
                 if self.targets:
                     rargs = ({'region': x} for x in self.targets)
                     rargs = self._add_process_args(rargs)
@@ -1038,6 +1068,7 @@ class BamAnalyzer(object):
                     results = p.map(_process_runner, 
                                     zip(rargs, repeat(kwargs)), 1)
         else:
+            kwargs['logger'] = self.logger
             (f, tmp_bam) = tempfile.mkstemp(suffix='.bam', dir=self.tmp)
             os.close(f)
             kwargs['tmp_bam'] = tmp_bam
@@ -1128,7 +1159,7 @@ class BamAnalyzer(object):
  
     def collate_multiple_bams(self, bams):
         self.logger.info("Concatanating cached reads and collating by read " + 
-                         " ID using samtools")
+                         "ID using samtools")
         dash = '-'
         (f, collated) = tempfile.mkstemp(suffix='.collated', dir=self.tmp)
         os.close(f)
