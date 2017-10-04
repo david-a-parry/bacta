@@ -448,6 +448,20 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
     if paired is None:
         paired = False
     f_msg = "Finished reading {:,} reads from input BAM".format(n)
+    if pair_tracker[1] or pair_tracker[2]:
+        contig = '*'
+        try:
+            contig = bf.get_reference_name(prev_chrom)
+        except ValueError:
+            pass
+        logger.warn("Clearing {} unpaired reads at end of ".format(
+                    (len(pair_tracker[1]) + len(pair_tracker[2]))) + 
+                    "contig " + contig)
+        pair_tracker.clear()
+        if candidate_qnames:
+            logger.warn("Clearing {} unmatched clipped reads ".format(
+                        len(candidate_qnames)) + "at end of contig " + contig)
+            candidate_qnames.clear()
     if unmapped_only:
         f_msg += " for unmapped reads"
     elif region:
