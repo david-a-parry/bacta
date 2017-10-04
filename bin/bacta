@@ -95,7 +95,11 @@ def get_parser():
                                help='''Number of threads to use. In order to 
                                        use more than one thread for the initial
                                        read processing step, the input BAM must
-                                       be sorted and indexed. Default=1''')
+                                       be sorted and indexed and the 
+                                       --no_caching option must NOT be used. 
+                                       Multiple threads can still be used for 
+                                       the BWA alignment step regardless of 
+                                       these conditions. Default=1''')
     optional_args.add_argument('-l', '--log_file', 
                                help='''Output logging information to this file
                                        (in addition to STDERR).''')

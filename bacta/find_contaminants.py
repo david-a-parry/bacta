@@ -1046,6 +1046,11 @@ class BamAnalyzer(object):
                   "get_unaligned": self.get_unaligned,
                   "logfile": self.log_file,}
         read_threads = self.threads
+        if self.no_caching and threads > 1:
+            self.logger.warn("--no_caching option is incompatible with " + 
+                             "multithreaded read retrieval. Input will be " + 
+                             "read using a single process.\n")
+            read_threads = 1
         has_index = self._check_bam_index()
         if self.targets and not has_index:
             self.logger.warn("No valid index found for " + self.bam + " - " + 
