@@ -1046,6 +1046,7 @@ class BamAnalyzer(object):
             self.logger.warn("No valid index found for " + self.bam + " - " + 
                              "an index is required in order to use " +
                              "multithreaded read retrieval") 
+            self.logger.warn("Attempting to index" + self.bam)
             try:
                 pysam.index(self.bam)
             except pysam.SamtoolsError as e:
