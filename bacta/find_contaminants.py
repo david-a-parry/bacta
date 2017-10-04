@@ -734,8 +734,24 @@ class BamAnalyzer(object):
                     continue
                 if self.check_read_clipping(read):
                     self.read_to_fastq(read, self.r1_fq)
-        self.logger.info("Finished reading {:,} reads from input BAM" 
+        self.logger.info("Finished reading {:,} reads from input BAM"
                          .format(n))
+        if pair_tracker[1] or pair_tracker[2]:
+            contig = '*'
+            try:
+                contig = self.bamfile.get_reference_name(prev_chrom)
+            except ValueError:
+                pass
+            self.logger.warn("Clearing {} unpaired reads at end of "  
+                              .format((len(pair_tracker[1]) + 
+                                       len(pair_tracker[2]))) + 
+                             "contig " + contig)
+            pair_tracker.clear()
+            if candidate_qnames:
+                self.logger.warn("Clearing {} unmatched clipped reads "
+                                 .format(len(candidate_qnames)) + 
+                                "at end of contig " + contig)
+                candidate_qnames.clear()
         if self._bam_cache is not None:
             self._bam_cache.close()
             self._process_bam_cache()
