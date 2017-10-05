@@ -59,8 +59,9 @@ def get_parser():
                                help='''Location of bwa executable. Only 
                                        required if not in your PATH.''')
     optional_args.add_argument('-s', '--samtools', metavar='SAMTOOLS', 
-                               help='''Location of samtools executable. Only 
-                                       required if not in your PATH.''')
+                               help='''Location of samtools (v1.3 or newer) 
+                                       executable. Only required if not in your
+                                       PATH.''')
     optional_args.add_argument('-m', '--min_fraction_clipped', metavar='FLOAT', 
                                type=float, default=0.15,
                                help='''Minimum proportion of a read that is 
