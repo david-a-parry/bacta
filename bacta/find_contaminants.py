@@ -482,6 +482,18 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
     return {"n_cached": cached, "bam_cache": tmp_bam, "fq1": fq_writer.fq1, 
             "fq2": fq_writer.fq2, "paired": paired}
 
+def _concat_tmp_fastqs(files, output):
+    logger = mp.get_logger()
+    logger.info("Concatanating {} temporary FASTQs to {}"
+                .format(len(files, output)))
+    with open(output, 'wb') as wfh:
+        for fn in files:
+            with open(fn, 'rb') as rfh:
+                shutil.copyfileobj(rfh, wfh)
+    logger.info("Finished concatanating - removing temporary fastqs")
+    for fn in files:
+        os.remove(fn)
+
 
 class BamAnalyzer(object):
 
@@ -1155,16 +1167,18 @@ class BamAnalyzer(object):
             if paired:
                 os.rename(r2s[0], self.fq2)
             return
-        call("cat " + str.join(" ", r1s) + " > " + self.fq1, shell=True)
-        self.logger.info("Removing temporary read 1 fastqs")
-        for f in r1s:
-            os.remove(f)
-        if paired:
-            self.logger.info("Concatanating read 2 fastqs")
-            call("cat " + str.join(" ", r2s) + "> " + self.fq2, shell=True)
-            self.logger.info("Removing temporary read 2 fastqs")
-            for f in r2s:
-                os.remove(f)
+        #list of fastqs is likely too long for just running shell command
+        if self.threads > 1 and paired:
+            self.logger.info("Concatanating fastqs")
+            with mp.Pool(read_threads) as p:
+                results = p.starmap(_concat_tmp_fastqs, 
+                                    [(r1s, self.fq1), (r2s, self.fq2)], 1)
+        else:
+            self.logger.info("Concatanating read 1 fastqs")
+            _concat_tmp_fastqs(r1s, self.fq1) #removes tmp fastqs after concat
+            if paired:
+                self.logger.info("Concatanating read 2 fastqs")
+                _concat_tmp_fastqs(r2s, self.fq2)
 
     def collate_single_bam(self, bam):
         collated = os.path.splitext(bam)[0] + "_collated"
