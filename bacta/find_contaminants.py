@@ -485,7 +485,7 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
 def _concat_tmp_fastqs(files, output):
     logger = mp.get_logger()
     logger.info("Concatanating {} temporary FASTQs to {}"
-                .format(len(files, output)))
+                .format(len(files), output))
     with open(output, 'wb') as wfh:
         for fn in files:
             with open(fn, 'rb') as rfh:
@@ -1161,7 +1161,6 @@ class BamAnalyzer(object):
                 sys.exit("ERROR: Expected the same number of read 1 and " + 
                          "read 2 fastq files after reading input. Instad got"+
                          " {} and {} respectively".format(len(r1s), len(r2s)))
-        self.logger.info("Concatanating read 1 fastqs")
         if len(r1s) == 1:
             os.rename(r1s[0], self.fq1)
             if paired:
