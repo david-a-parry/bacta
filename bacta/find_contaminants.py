@@ -1170,7 +1170,7 @@ class BamAnalyzer(object):
         #list of fastqs is likely too long for just running shell command
         if self.threads > 1 and paired:
             self.logger.info("Concatanating fastqs")
-            with mp.Pool(read_threads) as p:
+            with mp.Pool(self.threads) as p:
                 results = p.starmap(_concat_tmp_fastqs, 
                                     [(r1s, self.fq1), (r2s, self.fq2)], 1)
         else:
