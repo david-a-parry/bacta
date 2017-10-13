@@ -1063,7 +1063,7 @@ class BamAnalyzer(object):
         if self.no_caching and self.threads > 1:
             self.logger.warn("--no_caching option is incompatible with " + 
                              "multithreaded read retrieval. Input will be " + 
-                             "read using a single process.\n")
+                             "read using a single process.")
             read_threads = 1
         has_index = self._check_bam_index()
         if self.targets and not has_index:
