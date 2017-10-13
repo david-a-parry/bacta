@@ -282,7 +282,8 @@ def _mop_up_region_pairs(bamfile, pair_dict, clipped_names, fq_writer, logger):
                     fq_writer.output_pair(read, pair_dict[p][read_name])
                     clipped_names.remove(read_name)
                     clp += 1
-                elif check_read_clipping(read):
+                elif check_read_clipping(read, cigar_scorer, min_frac, 
+                                   min_clip=min_clip):
                     fq_writer.output_pair(read, pair_dict[p][read_name])
                     clp += 1
     logger.info("Found {} previously unpaired mates, {} over clipping"
@@ -443,7 +444,8 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
                 logger.warn("Skipping unpaired read '{}' at {}"
                                  .format(read_name, coord))
                 continue
-            if check_read_clipping(read):
+            if check_read_clipping(read, cigar_scorer, min_frac, 
+                                   min_clip=min_clip):
                 fq_writer.output_single(read)
     if paired is None:
         paired = False
