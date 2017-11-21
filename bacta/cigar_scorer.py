@@ -90,6 +90,8 @@ class CigarScorer(object):
             tuple containing the start offset and end offset according
             to softclipped bases at the start and end of the read.
         '''
+        if len(ctups) < 1:
+            return (0, 0)
         s_off, e_off = (0, 0)
         if ctups[0][0] == 4:
             s_off = ctups[0][1]

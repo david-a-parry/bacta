@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import os
+from subprocess import PIPE, Popen, call
+import re
+import pysam
+from itertools import repeat
+from collections import defaultdict
+from bacta.find_contaminants import Read2Fastq
+from bacta.cigar_scorer import CigarScorer
+from bacta.alignment_file_utils import get_bamfile
+
+def calc_expect(score, read_length, ref_length):
+    ''' 
+        Crude approximation of E-value which should be acceptable
+        when comparing identical sequences and long references.
+    '''
+    return read_length * ref_length * 2**-score
+
+def length_from_fai(fasta):
+    l = 0
+    fai = fasta + '.fai'
+    if not os.path.exists(fai):
+        sys.exit("ERROR: could not find fasta index ('{}') for fasta "
+                 .format(fai) + "reference. Please index ('samtools faidx"+
+                 " {}') before running this program." .format(fasta))
+    with open(fai, 'r') as fh:
+        for line in fh:
+            try:
+                l += int(line.split()[1])
+            except ValueError:
+                sys.exit("ERROR: Fasta index '{}' appears to be malformed."
+                         .format(fai) + " Could not determine sequence " + 
+                         "length for line:\n{}".format(line))
+    return l
+     
+def contam_reads_to_fastq(bam, output, ref, min_aligned_score=50, 
+                          min_expect_diff=1000, prog_interval=100000):
+    bamfile = get_bamfile(bam)
+    bam_ref_length = sum(bamfile.lengths)
+    ref_length = length_from_fai(ref)
+    fq_writer = Read2Fastq(output + '.r1.fastq.gz', output + '.r2.fastq.gz',
+                           set() )
+    #'ZC' = old cigar 
+    #'ZM' = old MD tag
+    #'MD' = current MD tag
+    pairs = dict()
+    n = 0
+    w = 0
+    prog_string = ''
+    for read in bamfile.fetch(until_eof=True):
+        n += 1
+        if n % prog_interval == 0:
+            msg = "\r{:,} reads parsed, {:,} reads written".format(n, w)
+            if len(msg) < len(prog_string):
+                sys.stderr.write(" " * len(prog_string))
+            sys.stderr.write(msg)
+        if read.is_secondary or read.is_supplementary:
+            continue
+        cigar_scorer = CigarScorer()
+        score = 0
+        old_score = 0
+        if read.cigartuples is not None:
+            score = cigar_scorer.score_cigartuples(read.cigartuples)
+        if read.has_tag('ZC'):
+            old_score = cigar_scorer.score_cigarstring(read.get_tag('ZC'))
+        if read.has_tag('MD') and read.has_tag('ZM'):
+            score -= cigar_scorer.md_mismatches(read.get_tag('MD'))
+            old_score -= cigar_scorer.md_mismatches(read.get_tag('ZM'))
+        e = calc_expect(score, read.query_length, bam_ref_length)
+        old_e = calc_expect(old_score, read.query_length, ref_length)
+        if read.is_paired:
+            if read.query_name in pairs:
+                (pair, p_score, p_old_score, p_e, p_old_e) = pairs[read.query_name]
+                if (score + p_score >= min_aligned_score *2 and
+                    (old_e * p_old_e)/(e * p_e) >= min_expect_diff):
+                    fq_writer.output_pair(read, pair)
+                    w += 2
+                del pairs[read.query_name]
+            else:
+                pairs[read.query_name] = (read, score, old_score, e, old_e)
+        else:
+            if (score >= min_aligned_score and old_e/e >= min_expect_diff):
+                fq_writer.output_single(read)
+                w += 1
+    fq_writer.close()
+    sys.stderr.write("\nFinished processing {:,} reads. {:,} reads written "
+                     .format(n, w) + "to FASTQ.\n")
+
+def get_parser():
+    '''Get ArgumentParser'''
+    parser = argparse.ArgumentParser(
+                  description='Convert contaminant reads from BAM into fastq' +
+                              ' format.',
+                  add_help=False)
+    required_args = parser.add_argument_group('Required Arguments')
+    optional_args = parser.add_argument_group('Optional Arguments')
+    required_args.add_argument('-i', '--bam', '--input', required=True, 
+                               metavar='BAM', 
+                               help='''Input BAM filename. This should be the
+                                       contaminant BAM produced by BACTA.''')
+    required_args.add_argument('-r', '--ref', required=True, metavar='REF', 
+                               help='''Reference fasta file containing 
+                                       original (i.e. non-contaminant)
+                                       sequences. This file must have been 
+                                       indexed by samtools.''')
+    required_args.add_argument('-o', '--output', metavar='FQ_PREFIX', 
+                               required=True,
+                               help='''Prefix for FASTQ output files.''')
+    optional_args.add_argument('-a', '--min_aligned_score', type=int, 
+                               default=50, metavar='SCORE',
+                               help='''Minimum aligned score for a read to be 
+                                       considered a potential contaminant.
+                                       Default=50''')
+    optional_args.add_argument('-e', '--min_expect_diff', type=float, 
+                               default=1000, metavar='SCORE',
+                               help='''Minimum factor difference in expect 
+                                       scores between original alignment and 
+                                       alignment to contaminant reference. A 
+                                       value of 10 would mean that the expect 
+                                       score for an alignment to a contaminant 
+                                       sequence must be 10 times greater than 
+                                       the expect score against the 
+                                       non-contaminant genome. Default=1000''')
+    optional_args.add_argument('-p', '--prog_interval', type=int, metavar='N',
+                               default=100000, 
+                               help='''Report progress every N reads. 
+                               Default=100000''')
+    optional_args.add_argument('-h', '--help', action='help', 
+                               help='''show this help message and exit''')
+
+    return parser
+
+if __name__ == '__main__':
+    parser = get_parser()
+    args = parser.parse_args()
+    contam_reads_to_fastq(**vars(args))
+
+

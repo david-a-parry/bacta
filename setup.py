@@ -11,9 +11,9 @@ setup(
     url = "https://github.com/gantzgraf/bacta",
     license='GPLv3',
     install_requires=[
-          'pysam',
+          'pysam>=0.12.0',
       ],
-    scripts = ["bin/bacta"],
+    scripts = ["bin/bacta", "bin/contam_reads_to_fastq"],
     classifiers = [
         "Programming Language :: Python :: 3",
         "Development Status :: 1 - Planning",
