@@ -92,6 +92,7 @@ def write_plots(table, prefix, logger):
     df = pd.read_table(table)
     output = prefix + "_plots.pdf"
     logger.info("Writing plots to {}...".format(output))
+    plt.style.use('seaborn-whitegrid')
     with PdfPages(output) as pdf:
         logger.info("Generating classification plots...")
         plt.figure(figsize=(11.7, 8.27), dpi=300)
