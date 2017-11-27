@@ -7,6 +7,7 @@ import pysam
 import logging
 import multiprocessing as mp
 from itertools import repeat
+import numpy as np
 import pandas as pd
 import matplotlib
 # Force matplotlib to not use any Xwindows backend.
@@ -42,6 +43,7 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     table_fn = output + ".tsv"
     table_out = open(table_fn, "wt")
     results = []
+    logger = None
     if threads > 1:
         rargs = list({'contig': x} for x in bamfile.references if x not in decoys)
         kwargs = {'bam': bam, 'thresholds': thresholds, 'logfile': logfile,
@@ -59,7 +61,10 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
         logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
         results.append(read_bam(bam, thresholds, prog_interval, ref_contigs,
                        contam_contigs, logger=logger))
+    if logger is None:
+        logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
     #collate results
+    logger.info("Collating results and writing to {}...".format(table_fn))
     counts = dict()
     for t in thresholds:
         counts[t] = {'FP': 0, 'FN': 0, 'TP': 0, 'TN': 0}
@@ -80,47 +85,71 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
                                  (str(counts[t][x]) for x in sorted(counts[t]))
                                 ) + "\n")
     table_out.close()
-    write_plots(table_fn, output)
+    logger.info("Finished writing table.")
+    write_plots(table_fn, output, logger)
 
-def write_plots(table, prefix):
+def write_plots(table, prefix, logger):
     df = pd.read_table(table)
     output = prefix + "_plots.pdf"
+    logger.info("Writing plots to {}...".format(output))
     with PdfPages(output) as pdf:
+        logger.info("Generating classification plots...")
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         lw = 2
         plt.title("Fraction per Classification")
-        plt.plot(df.Threshold, df.FP/(df.FP + df.TP))
-        plt.plot(df.Threshold, df.TP/(df.FP + df.TP))
+        plt.plot(df.Threshold, df.FP/(df.FP + df.TN))
+        plt.plot(df.Threshold, df.TP/(df.FN + df.TP))
         plt.xlabel('Threshold')
         plt.ylabel('Fraction')
         plt.legend(['FP', 'TP'], loc="right")
         pdf.savefig()
+        
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Number of Reads per Classification")
-        lw = 2
         plt.plot(df.Threshold, df.FP)
         plt.plot(df.Threshold, df.TP)    
-        plt.plot(df.Threshold, df.FN)
-        plt.plot(df.Threshold, df.TN)
+        #plt.plot(df.Threshold, df.FN)
+        #plt.plot(df.Threshold, df.TN)
         plt.xlabel('Threshold')
         plt.ylabel('Reads')
         plt.legend(['FP', 'TP', 'FN', 'TN'], loc="right")
         pdf.savefig()
 
         #ROC curve
+        logger.info("Calculating ROC curve...")
         fpr = dict()
         tpr = dict()
         roc_auc = dict()
+        cmap = plt.get_cmap('gist_rainbow')
+        colors = cmap(np.linspace(0, 1.0, len(df)))
+        n = 0
         for row in df.itertuples():
             actual = [0] * row.FP + [0] * row.TN + [1] * row.FN + [1] * row.TP
             pred =   [1] * row.FP + [0] * row.TN + [0] * row.FN + [1] * row.TP
-            fpr[row.Index], tpr[row.Index], _ = roc_curve(actual, pred)
-            roc_auc[row.Index] = auc(fpr[row.Index], tpr[row.Index])
+            fpr[row.Threshold], tpr[row.Threshold], _ = roc_curve(actual, pred)
+            roc_auc[row.Threshold] = auc(fpr[row.Threshold], tpr[row.Threshold])
+            print("AUC at {} = {:g}".format(row.Threshold, 
+                                            roc_auc[row.Threshold]))
+            plt.figure(figsize=(11.7, 8.27), dpi=300)
+            plt.plot(fpr[row.Threshold], tpr[row.Threshold], color=colors[n],
+                     lw=lw, 
+                     label='Threshold={} (area = {:g})'.format(row.Threshold,
+                                                       roc_auc[row.Threshold]))
+            plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Receiver operating characteristic for read clipping')
+            plt.legend(loc="lower right")
+            pdf.savefig()
+            n+= 1
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        lw = 2
-        plt.plot(fpr[2], tpr[2], color='darkorange',
-        	 lw=lw, label='ROC curve (area = %0.2f)' % roc_auc[2])
-        plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+        for (i, col) in zip(roc_auc, colors):
+            plt.plot(fpr[i], tpr[i], color=col, lw=lw, 
+                     label='Threshold={} (area = {:g})'.format(
+                                                                i, roc_auc[i]))
+        plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
         plt.xlabel('False Positive Rate')
@@ -128,6 +157,7 @@ def write_plots(table, prefix):
         plt.title('Receiver operating characteristic for read clipping')
         plt.legend(loc="lower right")
         pdf.savefig()
+        logger.info("Finished generating plots")
 
 def _process_runner(tup):
     kwargs1, kwargs2 = tup
@@ -163,7 +193,7 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
             continue
         match = rid_to_coord_re.match(read.query_name)
         if match:
-            contig = match.group(1)
+            chrom = match.group(1)
             start = match.group(2)
             end = match.group(3)
         else:
@@ -171,17 +201,17 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                          "for read '{}'. ".format(read.query_name) + 
                          "Is this from a DWGSIM simulated read?")
             continue
-        if contig in contam_contigs:
+        if chrom in contam_contigs:
             is_contam = True
-        elif contig in target_contigs:
+        elif chrom in target_contigs:
             is_contam = False
         else:
-            if contig not in warned_contigs:
+            if chrom not in warned_contigs:
                 logger.warn("Could not determine origin of " +
-                            "contig for '{}'. ".format(contig) + 
+                            "contig for '{}'. ".format(chrom) + 
                             "Is this contig in either of your reference " + 
                             "files?")
-                warned_contigs.add(contig)
+                warned_contigs.add(chrom)
             continue
         length = 0
         clipping = 0
@@ -209,6 +239,11 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                     v = 'TN'
             counts[t][v] += 1
     bf.close()
+    if contig:
+        cmsg = ' for contig ' + contig
+    else:
+        cmsg = ''
+    logger.info("Finished parsing {:,} reads{}.".format(n, cmsg))
     return counts
 
 def _initialize_mp_logger(logger, loglevel, logfile=None):
