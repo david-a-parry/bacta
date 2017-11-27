@@ -5,7 +5,6 @@ import os
 from subprocess import PIPE, Popen, call
 import re
 import pysam
-from itertools import repeat
 from collections import defaultdict
 from bacta.find_contaminants import Read2Fastq
 from bacta.cigar_scorer import CigarScorer
