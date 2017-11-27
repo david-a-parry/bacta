@@ -8,6 +8,9 @@ import logging
 import multiprocessing as mp
 from itertools import repeat
 import pandas as pd
+import matplotlib
+# Force matplotlib to not use any Xwindows backend.
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.metrics import roc_curve, auc
@@ -213,7 +216,7 @@ def _initialize_mp_logger(logger, loglevel, logfile=None):
     ch = logging.StreamHandler()  
     ch.setLevel(logging.INFO) 
     formatter = logging.Formatter(
-                                  '[%(asctime)s] clipping_roc-%(processName)s'+
+                                  '[%(asctime)s] TEST_CLIP-%(processName)s'+
                                   ' - %(levelname)s - %(message)s') 
     ch.setFormatter(formatter)
     logger.addHandler(ch)
