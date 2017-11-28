@@ -87,7 +87,14 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     
     df = write_table(table, table_out)
     logger.info("Finished writing table.")
+    report_precision_recall(df, logger)
     write_plots(df, output, logger)
+
+def report_precision_recall(df, logger):
+    for row in df.itertuples():
+            logger.info("At threshold={} precision={:g}, recall={:g}"
+                        .format(row.Threshold, row.Precision, row.Sensitivity))
+
 
 def write_table(table, fh):
     tab = StringIO(table)
@@ -108,8 +115,9 @@ def write_table(table, fh):
     cum_ref.reverse()
     df['TP'] = cum_contam
     df['FP'] = cum_ref
-    df['Frac_TP'] = df.TP/total_contam
-    df['Frac_FP'] = df.FP/total_ref
+    df['Sensitivity'] = df.TP/total_contam
+    df['1-Specificity'] = df.FP/total_ref
+    df['Precision'] = df.TP/(df.TP + df.FP)
     df.to_csv(fh, sep='\t', index=False)
     fh.close()
     return df
@@ -120,7 +128,7 @@ def write_plots(df, prefix, logger):
     logger.info("Writing plots to {}...".format(output))
     total_ref = df['REF'].sum()
     total_contam = df['CONTAM'].sum()
-    roc_auc = auc(df.Frac_FP, df.Frac_TP)
+    roc_auc = auc(df['1-Specificity'], df['Sensitivity'])
     with PdfPages(output) as pdf:
         logger.info("Generating classification plots...")
         plt.figure(figsize=(11.7, 8.27), dpi=300)
@@ -146,7 +154,7 @@ def write_plots(df, prefix, logger):
         logger.info("Writing ROC curve...")
         n = 0
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        plt.plot(df.Frac_FP, df.Frac_TP, lw=lw, 
+        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, 
                      label='ROC curve (area = {:g})'.format(roc_auc))
         plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
         plt.xlim([0.0, 1.0])
