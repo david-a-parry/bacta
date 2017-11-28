@@ -18,12 +18,13 @@ from sklearn.metrics import roc_curve, auc
 from collections import defaultdict
 from bacta.cigar_scorer import CigarScorer
 from bacta.alignment_file_utils import get_bamfile
+from bedfinder import BedFinder
 
 rid_to_coord_re = re.compile(r'''^(\S+)_(\d+)_(\d+)(_\d+){5}:''')
 
 def test_clipping(bam, output, ref, contaminant_ref, thresholds, 
-                  prog_interval, threads, decoy_contigs=[], debug=False, 
-                  quiet=False, logfile=None):
+                  prog_interval, threads, decoy_contigs=[], avoid_regions=None,
+                  debug=False, quiet=False, logfile=None):
     ''' 
         Read BAM of simulated reference and contaminant reads (generated
         by DWGSIM) and test sensitivity/specificity at differing 
@@ -47,7 +48,7 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     if threads > 1:
         rargs = list({'contig': x} for x in bamfile.references if x not in decoys)
         kwargs = {'bam': bam, 'thresholds': thresholds, 'logfile': logfile,
-                  'prog_interval': prog_interval, 
+                  'avoid_bed': avoid_regions, 'prog_interval': prog_interval, 
                   'target_contigs': ref_contigs, 
                   'contam_contigs': contam_contigs}
         if debug:
@@ -60,7 +61,7 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     else:
         logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
         results.append(read_bam(bam, thresholds, prog_interval, ref_contigs,
-                       contam_contigs, logger=logger))
+                       contam_contigs, avoid_bed=avoid_regions, logger=logger))
     if logger is None:
         logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
     #collate results
@@ -92,7 +93,6 @@ def write_plots(table, prefix, logger):
     df = pd.read_table(table)
     output = prefix + "_plots.pdf"
     logger.info("Writing plots to {}...".format(output))
-    plt.style.use('seaborn-whitegrid')
     with PdfPages(output) as pdf:
         logger.info("Generating classification plots...")
         plt.figure(figsize=(11.7, 8.27), dpi=300)
@@ -124,7 +124,9 @@ def write_plots(table, prefix, logger):
         cmap = plt.get_cmap('gist_rainbow')
         colors = cmap(np.linspace(0, 1.0, len(df)))
         n = 0
-        for row in df.itertuples():
+        for row in sorted(df.itertuples()):
+            logger.info("Calculating AUC for threshold = {}".format(
+                                                                row.Threshold))
             actual = [0] * row.FP + [0] * row.TN + [1] * row.FN + [1] * row.TP
             pred =   [1] * row.FP + [0] * row.TN + [0] * row.FN + [1] * row.TP
             fpr[row.Threshold], tpr[row.Threshold], _ = roc_curve(actual, pred)
@@ -144,9 +146,9 @@ def write_plots(table, prefix, logger):
             plt.title('Receiver operating characteristic for read clipping')
             plt.legend(loc="lower right")
             pdf.savefig()
-            n+= 1
+            n += 1
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        for (i, col) in zip(roc_auc, colors):
+        for (i, col) in zip(sorted(roc_auc), colors):
             plt.plot(fpr[i], tpr[i], color=col, lw=lw, 
                      label='Threshold={} (area = {:g})'.format(
                                                                 i, roc_auc[i]))
@@ -166,10 +168,13 @@ def _process_runner(tup):
     return read_bam(**kwargs2)
 
 def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
-             contig=None, logger=None, 
+             contig=None, avoid_bed=None, logger=None, 
              loglevel=logging.INFO, logfile=None, ):
     cigar_scorer = CigarScorer()
-    bf = get_bamfile(bam) 
+    bf = get_bamfile(bam)
+    bfinder = None
+    if avoid_bed:
+        bfinder = BedFinder(avoid_bed)
     if logger is None:
         logger = mp.get_logger()
         if logger.level == logging.NOTSET:
@@ -192,6 +197,9 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                              .format(n, coord))
         if read.is_unmapped or read.is_secondary or read.is_supplementary:
             continue
+        if bfinder:
+            if read_overlaps(bfinder, cigar_scorer, read):
+                continue
         match = rid_to_coord_re.match(read.query_name)
         if match:
             chrom = match.group(1)
@@ -246,6 +254,14 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
         cmsg = ''
     logger.info("Finished parsing {:,} reads{}.".format(n, cmsg))
     return counts
+
+def read_overlaps(bedfinder, cigar_scorer, read):
+    ctups = read.cigartuples
+    s_off, e_off = cigar_scorer.get_clipped_offset(ctups)
+    start = read.reference_start - s_off
+    end = (cigar_scorer.get_aligned_length(ctups) + 
+           read.reference_start + e_off)
+    return bedfinder.fetch(read.reference_name, start, end)
 
 def _initialize_mp_logger(logger, loglevel, logfile=None):
     logger.setLevel(loglevel)
@@ -358,6 +374,10 @@ def get_parser():
                                help='''Names of decoy contigs from input BAM. 
                                        Reads mapped to these contigs will be 
                                        ignored. Default=['hs37d5', 'NC_007605']
+                                    ''')
+    optional_args.add_argument('-a', '--avoid_regions', metavar='BED', 
+                               help='''BED file of regions to ignore (e.g. 
+                                       repetitive or low complexity regions).
                                     ''')
     optional_args.add_argument('-p', '--prog_interval', type=int, metavar='N',
                                default=100000, 
