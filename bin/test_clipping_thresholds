@@ -176,13 +176,15 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
              loglevel=logging.INFO, logfile=None, ):
     cigar_scorer = CigarScorer()
     bf = get_bamfile(bam)
-    bfinder = None
-    if avoid_bed:
-        bfinder = BedFinder(avoid_bed)
     if logger is None:
         logger = mp.get_logger()
         if logger.level == logging.NOTSET:
             _initialize_mp_logger(logger, loglevel, logfile)
+    bfinder = None
+    if avoid_bed:
+        logger.info("Reading BED of regions to ignore ({})".format(avoid_bed))
+        bfinder = BedFinder(avoid_bed)
+        logger.info("Finished parsing BED.")
     kwargs = {}
     if contig:
         kwargs['contig'] = contig
