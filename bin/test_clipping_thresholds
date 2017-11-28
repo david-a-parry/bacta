@@ -230,7 +230,7 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                 if read_overlaps(bfinder, cigar_scorer, read):
                     continue
             else: #use originating simulated coords if read is from reference
-                if bedfinder.fetch(chrom, start, end):
+                if bfinder.fetch(chrom, start, end):
                     continue
         length = 0
         clipping = 0
