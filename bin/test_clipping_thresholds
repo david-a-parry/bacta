@@ -3,6 +3,7 @@ import argparse
 import sys
 import os
 import re
+import bisect
 import pysam
 import logging
 import multiprocessing as mp
@@ -15,6 +16,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.metrics import roc_curve, auc
+from io import StringIO
 from collections import defaultdict
 from bacta.cigar_scorer import CigarScorer
 from bacta.alignment_file_utils import get_bamfile
@@ -68,38 +70,64 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     logger.info("Collating results and writing to {}...".format(table_fn))
     counts = dict()
     for t in thresholds:
-        counts[t] = {'FP': 0, 'FN': 0, 'TP': 0, 'TN': 0}
+        counts[t] = {'CONTAM': 0, 'REF': 0}
     for res in results:
         for t in thresholds:
             for k in res[t]:
                 counts[t][k] += res[t][k]
-    #write table
+    #create table
     #first the header...
-    table_out.write("Threshold\t")
-    table_out.write(str.join("\t", 
-                             (x for x in sorted(counts[thresholds[0]])))
-                    + "\n")
+    table = "Threshold\t" + str.join("\t", 
+                            (x for x in sorted(counts[thresholds[0]]))) + "\n"
     #...then results
     for t in thresholds:
-        table_out.write("{}\t".format(t))
-        table_out.write(str.join("\t", 
-                                 (str(counts[t][x]) for x in sorted(counts[t]))
-                                ) + "\n")
-    table_out.close()
+        table += "{}\t".format(t)
+        table += str.join("\t", (str(counts[t][x]) for x in sorted(counts[t]))
+                                ) + "\n"
+    
+    df = write_table(table, table_out)
     logger.info("Finished writing table.")
-    write_plots(table_fn, output, logger)
+    write_plots(df, output, logger)
 
-def write_plots(table, prefix, logger):
-    df = pd.read_table(table)
+def write_table(table, fh):
+    tab = StringIO(table)
+    df = pd.read_table(tab)  
+    total_ref = df['REF'].sum()
+    total_contam = df['CONTAM'].sum()
+    tc = 0
+    tr = 0
+    cum_contam = []
+    cum_ref = []
+    for ref in reversed(df.REF): 
+        tr += ref
+        cum_ref.append(tr)
+    for contam in reversed(df.CONTAM): 
+        tc += contam
+        cum_contam.append(tc)
+    cum_contam.reverse()
+    cum_ref.reverse()
+    df['TP'] = cum_contam
+    df['FP'] = cum_ref
+    df['Frac_TP'] = df.TP/total_contam
+    df['Frac_FP'] = df.FP/total_ref
+    df.to_csv(fh, sep='\t', index=False)
+    fh.close()
+    return df
+
+def write_plots(df, prefix, logger):
+    plt.style.use('seaborn-whitegrid')
     output = prefix + "_plots.pdf"
     logger.info("Writing plots to {}...".format(output))
+    total_ref = df['REF'].sum()
+    total_contam = df['CONTAM'].sum()
+    roc_auc = auc(df.Frac_FP, df.Frac_TP)
     with PdfPages(output) as pdf:
         logger.info("Generating classification plots...")
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         lw = 2
         plt.title("Fraction per Classification")
-        plt.plot(df.Threshold, df.FP/(df.FP + df.TN))
-        plt.plot(df.Threshold, df.TP/(df.FN + df.TP))
+        plt.plot(df.Threshold, df.FP/total_ref)
+        plt.plot(df.Threshold, df.TP/total_contam)
         plt.xlabel('Threshold')
         plt.ylabel('Fraction')
         plt.legend(['FP', 'TP'], loc="right")
@@ -108,50 +136,18 @@ def write_plots(table, prefix, logger):
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Number of Reads per Classification")
         plt.plot(df.Threshold, df.FP)
-        plt.plot(df.Threshold, df.TP)    
-        #plt.plot(df.Threshold, df.FN)
-        #plt.plot(df.Threshold, df.TN)
+        plt.plot(df.Threshold, df.TP)
         plt.xlabel('Threshold')
         plt.ylabel('Reads')
-        plt.legend(['FP', 'TP', 'FN', 'TN'], loc="right")
+        plt.legend(['FP', 'TP'], loc="right")
         pdf.savefig()
 
         #ROC curve
-        logger.info("Calculating ROC curve...")
-        fpr = dict()
-        tpr = dict()
-        roc_auc = dict()
-        cmap = plt.get_cmap('gist_rainbow')
-        colors = cmap(np.linspace(0, 1.0, len(df)))
+        logger.info("Writing ROC curve...")
         n = 0
-        for row in sorted(df.itertuples()):
-            logger.info("Calculating AUC for threshold = {}".format(
-                                                                row.Threshold))
-            actual = [0] * row.FP + [0] * row.TN + [1] * row.FN + [1] * row.TP
-            pred =   [1] * row.FP + [0] * row.TN + [0] * row.FN + [1] * row.TP
-            fpr[row.Threshold], tpr[row.Threshold], _ = roc_curve(actual, pred)
-            roc_auc[row.Threshold] = auc(fpr[row.Threshold], tpr[row.Threshold])
-            print("AUC at {} = {:g}".format(row.Threshold, 
-                                            roc_auc[row.Threshold]))
-            plt.figure(figsize=(11.7, 8.27), dpi=300)
-            plt.plot(fpr[row.Threshold], tpr[row.Threshold], color=colors[n],
-                     lw=lw, 
-                     label='Threshold={} (area = {:g})'.format(row.Threshold,
-                                                       roc_auc[row.Threshold]))
-            plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title('Receiver operating characteristic for read clipping')
-            plt.legend(loc="lower right")
-            pdf.savefig()
-            n += 1
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        for (i, col) in zip(sorted(roc_auc), colors):
-            plt.plot(fpr[i], tpr[i], color=col, lw=lw, 
-                     label='Threshold={} (area = {:g})'.format(
-                                                                i, roc_auc[i]))
+        plt.plot(df.Frac_FP, df.Frac_TP, lw=lw, 
+                     label='ROC curve (area = {:g})'.format(roc_auc))
         plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
         plt.xlim([0.0, 1.0])
         plt.ylim([0.0, 1.05])
@@ -187,7 +183,7 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
     warned_contigs = set()
     counts = dict()
     for t in thresholds:
-        counts[t] = {'FP': 0, 'FN': 0, 'TP': 0, 'TN': 0}
+        counts[t] = {'CONTAM': 0, 'REF': 0}
     n = 0
     for read in bf.fetch(**kwargs):
         n += 1
@@ -209,8 +205,10 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
             continue
         if chrom in contam_contigs:
             is_contam = True
+            rtype = 'CONTAM'
         elif chrom in target_contigs:
             is_contam = False
+            rtype = 'REF'
         else:
             if chrom not in warned_contigs:
                 logger.warn("Could not determine origin of " +
@@ -239,18 +237,8 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
         if read.has_tag('MD'):
             clipping += cigar_scorer.md_mismatches(read.get_tag('MD'))
         clip = float(clipping)/length
-        for t in thresholds:
-            if clip >= t:
-                if is_contam:
-                    v = 'TP'
-                else:
-                    v = 'FP'
-            else:
-                if is_contam:
-                    v = 'FN'
-                else:
-                    v = 'TN'
-            counts[t][v] += 1
+        t = bisect.bisect_left(thresholds, clip)
+        counts[thresholds[t]][rtype] += 1
     bf.close()
     if contig:
         cmsg = ' for contig ' + contig
