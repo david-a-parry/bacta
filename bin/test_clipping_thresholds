@@ -197,9 +197,6 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                              .format(n, coord))
         if read.is_unmapped or read.is_secondary or read.is_supplementary:
             continue
-        if bfinder:
-            if read_overlaps(bfinder, cigar_scorer, read):
-                continue
         match = rid_to_coord_re.match(read.query_name)
         if match:
             chrom = match.group(1)
@@ -222,6 +219,13 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
                             "files?")
                 warned_contigs.add(chrom)
             continue
+        if bfinder:
+            if is_contam:
+                if read_overlaps(bfinder, cigar_scorer, read):
+                    continue
+            else: #use originating simulated coords if read is from reference
+                if bedfinder.fetch(chrom, start, end):
+                    continue
         length = 0
         clipping = 0
         for c in read.cigartuples:
