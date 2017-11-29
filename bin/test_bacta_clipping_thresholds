@@ -1,0 +1,361 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import os
+import re
+import bisect
+import pysam
+import logging
+import multiprocessing as mp
+from itertools import repeat
+import numpy as np
+import matplotlib
+# Force matplotlib to not use any Xwindows backend.
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from sklearn.metrics import roc_curve, auc
+from collections import defaultdict
+from bacta.cigar_scorer import CigarScorer
+from bacta.alignment_file_utils import get_bamfile
+from bacta.benchmark_utils import contigs_from_fasta, write_table
+from bacta.benchmark_utils import report_precision_recall
+from bedfinder import BedFinder
+
+rid_to_coord_re = re.compile(r'''^(\S+)_(\d+)_(\d+)(_\d+){5}:''')
+
+def test_clipping(bam, output, ref, contaminant_ref, thresholds, 
+                  prog_interval, threads, decoy_contigs=[], avoid_regions=None,
+                  debug=False, quiet=False, logfile=None):
+    ''' 
+        Read BAM of simulated reference and contaminant reads (generated
+        by DWGSIM) and test sensitivity/specificity at differing 
+        clipping thresholds. Produces a table and plots.
+    '''
+    ref_contigs = contigs_from_fasta(ref)
+    contam_contigs = contigs_from_fasta(contaminant_ref)
+    if ref_contigs.intersection(contam_contigs):
+        sys.exit("ERROR: The following contigs are present in both " + 
+                 "--ref and --contaminant_ref genomes:\n" + 
+                 str.join("\n", 
+                          sorted(ref_contigs.intersection(contam_contigs))))
+    decoys = set(decoy_contigs)
+    bamfile = get_bamfile(bam) 
+    if min(thresholds) < 0.0:
+        raise RuntimeError("Error in arguments: --thresholds values can not " +
+                           "be below 0.0")
+    if max(thresholds) > 1.0:
+        raise RuntimeError("Error in arguments: --thresholds values can not " +
+                           "be greater than 1.0")
+    thresholds.sort()
+    table_fn = output + ".tsv"
+    table_out = open(table_fn, "wt")
+    results = []
+    logger = None
+    if threads > 1:
+        rargs = list({'contig': x} for x in bamfile.references if x not in decoys)
+        kwargs = {'bam': bam, 'thresholds': thresholds, 'logfile': logfile,
+                  'avoid_bed': avoid_regions, 'prog_interval': prog_interval, 
+                  'target_contigs': ref_contigs, 
+                  'contam_contigs': contam_contigs}
+        if debug:
+            kwargs['loglevel'] = logging.DEBUG
+        elif quiet:
+            kwargs['loglevel'] = logging.WARNING
+        with mp.Pool(threads) as p:
+            results = p.map(_process_runner, 
+                            zip(rargs, repeat(kwargs)), 1)
+    else:
+        logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
+        results.append(read_bam(bam, thresholds, prog_interval, ref_contigs,
+                       contam_contigs, decoys=decoys, avoid_bed=avoid_regions, 
+                       logger=logger))
+    if logger is None:
+        logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
+    #collate results
+    logger.info("Collating results and writing to {}...".format(table_fn))
+    counts = dict()
+    for t in thresholds:
+        counts[t] = {'CONTAM': 0, 'REF': 0}
+    for res in results:
+        for t in thresholds:
+            for k in res[t]:
+                counts[t][k] += res[t][k]
+    #get table as dataframe
+    df = write_table(counts, table_out)
+    logger.info("Finished writing table.")
+    report_precision_recall(df, logger)
+    write_plots(df, output, logger)
+
+def write_plots(df, prefix, logger):
+    plt.style.use('seaborn-whitegrid')
+    output = prefix + "_plots.pdf"
+    logger.info("Writing plots to {}...".format(output))
+    total_ref = df['REF'].sum()
+    total_contam = df['CONTAM'].sum()
+    roc_auc = auc(df['1-Specificity'], df['Sensitivity'])
+    with PdfPages(output) as pdf:
+        logger.info("Generating classification plots...")
+        plt.figure(figsize=(11.7, 8.27), dpi=300)
+        lw = 2
+        plt.title("Fraction per Classification")
+        plt.plot(df.Threshold, df.FP/total_ref)
+        plt.plot(df.Threshold, df.TP/total_contam)
+        plt.xlabel('Threshold')
+        plt.ylabel('Fraction')
+        plt.legend(['FP', 'TP'], loc="right")
+        pdf.savefig()
+        
+        plt.figure(figsize=(11.7, 8.27), dpi=300)
+        plt.title("Number of Reads per Classification")
+        plt.plot(df.Threshold, df.FP)
+        plt.plot(df.Threshold, df.TP)
+        plt.xlabel('Threshold')
+        plt.ylabel('Reads')
+        plt.legend(['FP', 'TP'], loc="right")
+        pdf.savefig()
+
+        #ROC curve
+        logger.info("Writing ROC curve...")
+        n = 0
+        plt.figure(figsize=(11.7, 8.27), dpi=300)
+        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, 
+                     label='ROC curve (area = {:g})'.format(roc_auc))
+        plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver operating characteristic for read clipping')
+        plt.legend(loc="lower right")
+        pdf.savefig()
+        logger.info("Finished generating plots")
+
+def _process_runner(tup):
+    kwargs1, kwargs2 = tup
+    kwargs2.update(kwargs1)
+    return read_bam(**kwargs2)
+
+def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
+             contig=None, decoys=set(), avoid_bed=None, logger=None, 
+             loglevel=logging.INFO, logfile=None, ):
+    cigar_scorer = CigarScorer()
+    bf = get_bamfile(bam)
+    if logger is None:
+        logger = mp.get_logger()
+        if logger.level == logging.NOTSET:
+            _initialize_mp_logger(logger, loglevel, logfile)
+    bfinder = None
+    if avoid_bed:
+        logger.info("Reading BED of regions to ignore ({})".format(avoid_bed))
+        bfinder = BedFinder(avoid_bed)
+        logger.info("Finished parsing BED.")
+    kwargs = {}
+    if contig:
+        kwargs['contig'] = contig
+    else:
+        kwargs['until_eof'] = True
+    warned_contigs = set()
+    counts = dict()
+    for t in thresholds:
+        counts[t] = {'CONTAM': 0, 'REF': 0}
+    n = 0
+    for read in bf.fetch(**kwargs):
+        n += 1
+        if not n % prog_interval:
+            coord = _get_read_coord(read)
+            logger.info("Reading input: {:,} records read. At pos {}"
+                             .format(n, coord))
+        if read.is_unmapped or read.is_secondary or read.is_supplementary:
+            continue
+        match = rid_to_coord_re.match(read.query_name)
+        if match:
+            chrom = match.group(1)
+            start = match.group(2)
+            end = match.group(3)
+        else:
+            logger.warn("Could not parse originating contig " +
+                         "for read '{}'. ".format(read.query_name) + 
+                         "Is this from a DWGSIM simulated read?")
+            continue
+        if chrom in contam_contigs:
+            is_contam = True
+            rtype = 'CONTAM'
+        elif chrom in target_contigs:
+            is_contam = False
+            rtype = 'REF'
+            if chrom in decoys:
+                continue
+        else:
+            if chrom not in warned_contigs:
+                logger.warn("Could not determine origin of " +
+                            "contig for '{}'. ".format(chrom) + 
+                            "Is this contig in either of your reference " + 
+                            "files?")
+                warned_contigs.add(chrom)
+            continue
+        if bfinder:
+            if is_contam:
+                if read_overlaps(bfinder, cigar_scorer, read):
+                    continue
+            else: #use originating simulated coords if read is from reference
+                if bfinder.fetch(chrom, start, end):
+                    continue
+        length = 0
+        clipping = 0
+        for c in read.cigartuples:
+            if 4 <= c[0] <= 5:
+                #SOFT or HARD clip
+                clipping += c[1]
+                length += c[1]
+            elif c[0] < 2 or 7 <= c[0] <= 8:
+                #MATCH, INS, EQUAL or DIFF
+                length += c[1]
+        if read.has_tag('MD'):
+            clipping += cigar_scorer.md_mismatches(read.get_tag('MD'))
+        clip = float(clipping)/length
+        t = bisect.bisect_left(thresholds, clip)
+        t = t if t < len(thresholds) else t - 1
+        counts[thresholds[t]][rtype] += 1
+    bf.close()
+    if contig:
+        cmsg = ' for contig ' + contig
+    else:
+        cmsg = ''
+    logger.info("Finished parsing {:,} reads{}.".format(n, cmsg))
+    return counts
+
+def read_overlaps(bedfinder, cigar_scorer, read):
+    ctups = read.cigartuples
+    s_off, e_off = cigar_scorer.get_clipped_offset(ctups)
+    start = read.reference_start - s_off
+    end = (cigar_scorer.get_aligned_length(ctups) + 
+           read.reference_start + e_off)
+    return bedfinder.fetch(read.reference_name, start, end)
+
+def _initialize_mp_logger(logger, loglevel, logfile=None):
+    logger.setLevel(loglevel)
+    ch = logging.StreamHandler()  
+    ch.setLevel(logging.INFO) 
+    formatter = logging.Formatter(
+                                  '[%(asctime)s] TEST_CLIP-%(processName)s'+
+                                  ' - %(levelname)s - %(message)s') 
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    if logfile is not None:
+        fh = logging.FileHandler(logfile)
+        fh.setLevel(logger.level)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+
+def _get_read_coord(read, no_commas=False):
+    com = ','
+    if no_commas:
+        com = ''
+    if read.reference_id > -1:
+        coord = "{}:{:{n_format}}".format(read.reference_name, 
+                                          read.reference_start + 1, 
+                                          n_format=com)
+    else:
+        coord = "*/*"
+    return coord
+
+def get_logger(debug=False, quiet=False, logfile=None):
+    logger = logging.getLogger("clipping_roc")
+    if debug:
+        logger.setLevel(logging.DEBUG)
+    elif quiet:
+        logger.setLevel(logging.WARNING)
+    else:
+        logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+                    '[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
+    ch = logging.StreamHandler()
+    ch.setLevel(logger.level)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    if logfile is not None:
+        fh = logging.FileHandler(logfile)
+        fh.setLevel(self.logger.level)
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+    return logger
+
+def get_parser():
+    '''Get ArgumentParser'''
+    parser = argparse.ArgumentParser(
+                  description='''For a BAM file of reference and contaminant 
+                                 reads generated by dwgsim, test the 
+                                 sensitivity and specificity of contaminant 
+                                 identification at different clipping 
+                                 thresholds.''',
+                  add_help=False)
+    required_args = parser.add_argument_group('Required Arguments')
+    optional_args = parser.add_argument_group('Optional Arguments')
+    required_args.add_argument('-i', '--bam', '--input', required=True, 
+                               metavar='BAM', 
+                               help='''Input BAM filename. This should be the
+                                       mixed reference/contaminant reads BAM
+                                       generated from FASTQ .created by 
+                                       dwgsim.''')
+    required_args.add_argument('-r', '--ref', required=True, metavar='FASTA', 
+                               help='''Reference fasta file containing 
+                                       original (i.e. non-contaminant)
+                                       sequences. This file must have been 
+                                       indexed by samtools.''')
+    required_args.add_argument('-c', '--contaminant_ref', required=True, 
+                               metavar='FASTA', 
+                               help='''Reference fasta file containing 
+                                       contaminant sequences. This file must 
+                                       have been indexed by samtools.''')
+    required_args.add_argument('-o', '--output', metavar='PREFIX', 
+                               required=True,
+                               help='''Prefix for plot and table output 
+                                       files.''')
+    optional_args.add_argument('-t', '--thresholds', type=float, nargs='+', 
+                               metavar='FRAC', default=[0, 0.02, 0.05, 0.075, 
+                                                     0.10, 0.12, 0.15, 0.175,
+                                                     0.2, 0.5, 0.75, 0.9, 1.0],
+                               help='''Clipping thesholds to test. 
+                                        Default=[0, 0.02, 0.05, 0.075, 0.10, 
+                                        0.12, 0.15, 0.175, 0.2, 0.5, 0.75, 0.9,
+                                        1.0]''')
+    optional_args.add_argument('-d', '--decoy_contigs', nargs='+', 
+                               metavar='CONTIG', 
+                               default=['hs37d5', 'NC_007605'],
+                               help='''Names of decoy contigs from input BAM. 
+                                       Reads mapped to these contigs will be 
+                                       ignored. Default=['hs37d5', 'NC_007605']
+                                    ''')
+    optional_args.add_argument('-a', '--avoid_regions', metavar='BED', 
+                               help='''BED file of regions to ignore (e.g. 
+                                       repetitive or low complexity regions).
+                                    ''')
+    optional_args.add_argument('-p', '--prog_interval', type=int, metavar='N',
+                               default=100000, 
+                               help='''Report progress every N reads. 
+                               Default=100000''')
+    optional_args.add_argument('-T', '--threads', type=int, default=1,
+                               help='''Number of threads to use. In order to 
+                                       use more than one thread the input BAM 
+                                       must be sorted and indexed. 
+                                       Default=1''')
+    optional_args.add_argument('-l', '--logfile', 
+                               help='''Output logging information to this file
+                                       (in addition to STDERR).''')
+    optional_args.add_argument('--quiet', action='store_true',  
+                               help='''Only output error and warning logging 
+                                       information.''')
+    optional_args.add_argument('--debug', action='store_true', 
+                               help='''Output debugging information.''')
+    optional_args.add_argument('-h', '--help', action='help', 
+                               help='''show this help message and exit''')
+
+    return parser
+
+if __name__ == '__main__':
+    parser = get_parser()
+    args = parser.parse_args()
+    test_clipping(**vars(args))
+
+
