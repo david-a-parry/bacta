@@ -34,6 +34,11 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     '''
     ref_contigs = contigs_from_fasta(ref)
     contam_contigs = contigs_from_fasta(contaminant_ref)
+    if ref_contigs.intersection(contam_contigs):
+        sys.exit("ERROR: The following contigs are present in both " + 
+                 "--ref and --contaminant_ref genomes:\n" + 
+                 str.join("\n", 
+                          sorted(ref_contigs.intersection(contam_contigs))))
     decoys = set(decoy_contigs)
     bamfile = get_bamfile(bam) 
     if min(thresholds) < 0.0:
@@ -197,7 +202,7 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
     n = 0
     for read in bf.fetch(**kwargs):
         n += 1
-        if not n % 1000000:
+        if not n % prog_interval:
             coord = _get_read_coord(read)
             logger.info("Reading input: {:,} records read. At pos {}"
                              .format(n, coord))
