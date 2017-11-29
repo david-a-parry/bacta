@@ -81,30 +81,32 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
         for t in thresholds:
             for k in res[t]:
                 counts[t][k] += res[t][k]
-    #create table
-    #first the header...
-    table = "Threshold\t" + str.join("\t", 
-                            (x for x in sorted(counts[thresholds[0]]))) + "\n"
-    #...then results
-    for t in thresholds:
-        table += "{}\t".format(t)
-        table += str.join("\t", (str(counts[t][x]) for x in sorted(counts[t]))
-                                ) + "\n"
-    
-    df = write_table(table, table_out)
+    #get table as dataframe
+    df = write_table(counts, table_out)
     logger.info("Finished writing table.")
     report_precision_recall(df, logger)
     write_plots(df, output, logger)
 
 def report_precision_recall(df, logger):
     for row in df.itertuples():
-            logger.info("At threshold={} precision={:g}, recall={:g}"
-                        .format(row.Threshold, row.Precision, row.Sensitivity))
+        logger.info("At threshold={} precision={:g}, recall={:g}"
+                    .format(row.Threshold, row.Precision, row.Sensitivity))
 
 
-def write_table(table, fh):
+def write_table(counts, fh):
+    #create table as string
+    #first the header...
+    k, *_ = counts.keys()
+    table = "Threshold\t" + str.join("\t", (x for x in sorted(counts[k])))+"\n"
+    #...then results
+    for t in sorted(counts.keys()):
+        table += "{}\t".format(t)
+        table += str.join("\t", (str(counts[t][x]) for x in sorted(counts[t]))
+                                ) + "\n"
+    #use table string as input to pandas to create dataframe
     tab = StringIO(table)
-    df = pd.read_table(tab)  
+    df = pd.read_table(tab)
+    #calculate stats
     total_ref = df['REF'].sum()
     total_contam = df['CONTAM'].sum()
     tc = 0
