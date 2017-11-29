@@ -75,6 +75,23 @@ def _infer_bounds(read):
     end = read.reference_end + e_off
     return (start, end)
 
+def length_from_fai(fasta):
+    l = 0
+    fai = fasta + '.fai'
+    if not os.path.exists(fai):
+        sys.exit("ERROR: could not find fasta index ('{}') for fasta "
+                 .format(fai) + "reference. Please index ('samtools faidx" +
+                 " {}') before running this program." .format(fasta))
+    with open(fai, 'r') as fh:
+        for line in fh:
+            try:
+                l += int(line.split()[1])
+            except ValueError:
+                sys.exit("ERROR: Fasta index '{}' appears to be malformed."
+                         .format(fai) + " Could not determine sequence " + 
+                         "length for line:\n{}".format(line))
+    return l
+    
 def check_read_clipping(read, cigar_scorer, min_frac, min_clip=None, 
                         mate_cigar=None):
     ''' 
@@ -610,7 +627,7 @@ class BamAnalyzer(object):
             raise RuntimeError('--ref argument "{}" does not ' .format(ref) + 
                                'exist or is not a file')
         self.ref = ref
-        self.ref_length = self._length_from_fai(ref)
+        self.ref_length = length_from_fai(ref)
         if contaminants is None:
             contaminants = (os.path.splitext(bam)[0] + "_contaminants")
         self.output = output
@@ -675,24 +692,6 @@ class BamAnalyzer(object):
         if self.targets:
             self._check_targets()
 
-    def _length_from_fai(self, fasta):
-        l = 0
-        fai = fasta + '.fai'
-        if not os.path.exists(fai):
-            sys.exit("ERROR: could not find fasta index ('{}') for fasta "
-                     .format(fai) + "reference. Please index ('samtools faidx"+
-                     " {}') before running this program." .format(fasta))
-        with open(fai, 'r') as fh:
-            for line in fh:
-                try:
-                    l += int(line.split()[1])
-                except ValueError:
-                    sys.exit("ERROR: Fasta index '{}' appears to be malformed."
-                             .format(fai) + " Could not determine sequence " + 
-                             "length for line:\n{}".format(line))
-        return l
-        
-            
     def _check_targets(self):
         ldict = dict(zip( self.bamfile.references, self.bamfile.lengths))
         for gi in self.targets:
