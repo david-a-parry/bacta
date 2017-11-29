@@ -68,7 +68,8 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
     else:
         logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
         results.append(read_bam(bam, thresholds, prog_interval, ref_contigs,
-                       contam_contigs, avoid_bed=avoid_regions, logger=logger))
+                       contam_contigs, decoys=decoys, avoid_bed=avoid_regions, 
+                       logger=logger))
     if logger is None:
         logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
     #collate results
@@ -177,7 +178,7 @@ def _process_runner(tup):
     return read_bam(**kwargs2)
 
 def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
-             contig=None, avoid_bed=None, logger=None, 
+             contig=None, decoys=set(), avoid_bed=None, logger=None, 
              loglevel=logging.INFO, logfile=None, ):
     cigar_scorer = CigarScorer()
     bf = get_bamfile(bam)
@@ -224,6 +225,8 @@ def read_bam(bam, thresholds, prog_interval, target_contigs, contam_contigs,
         elif chrom in target_contigs:
             is_contam = False
             rtype = 'REF'
+            if chrom in decoys:
+                continue
         else:
             if chrom not in warned_contigs:
                 logger.warn("Could not determine origin of " +
