@@ -10,9 +10,9 @@ def write_table(counts, fh):
     table = "Threshold\t" + str.join("\t", (x for x in sorted(counts[k])))+"\n"
     #...then results
     for t in sorted(counts.keys()):
-        table += "{}\t".format(t)
-        table += str.join("\t", (str(counts[t][x]) for x in sorted(counts[t]))
-                                ) + "\n"
+        table += "{:g}\t".format(t)
+        table += str.join("\t", (str.format("{:.3g}", counts[t][x]) 
+                                 for x in sorted(counts[t]))) + "\n"
     #use table string as input to pandas to create dataframe
     tab = StringIO(table)
     df = pd.read_table(tab)
