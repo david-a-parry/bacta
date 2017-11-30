@@ -127,6 +127,7 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
         bfinder = BedFinder(avoid_bed)
         logger.info("Finished parsing BED.")
     warned_contigs = set()
+    avoid_pairs = set()
     pairs = dict()
     counts = dict()
     for e in expect_values:
@@ -174,14 +175,28 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
         read_length = read.infer_query_length() or read.query_length
         ref_cigar = read.get_tag('ZC')
         if bfinder:
+            if read.is_paired and read.query_name in avoid_pairs:
+                #skip read if its pair maps to a region to avoid
+                avoid_pairs.remove(read.query_name)
+                continue
+            avoid = False
             if is_contam:
                 old_pos = read.get_tag('ZP')
                 if read_overlapped(bfinder, cigar_scorer, read_length, 
                                    ref_cigar, old_pos):
-                    continue
+                    avoid = True
             else: #use originating simulated coords if read is from reference
                 if bfinder.fetch(chrom, start, end):
-                    continue
+                    avoid = True
+            if avoid:
+                # ensure we do not track orphan pairs because one of pair
+                # overlaps our regions to avoid
+                if read.is_paired:
+                    if read.query_name in pairs:
+                        del pairs[read.query_name]
+                    else:
+                        avoid_pairs.add(read.query_name)
+                continue
         if read.cigartuples is None:
             contam_score = 0
         else:
