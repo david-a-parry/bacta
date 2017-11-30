@@ -132,11 +132,10 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
     for e in expect_values:
         counts[e] = {'CONTAM': 0, 'REF': 0}
     n = 0
+    ref_total = 0
+    contam_total = 0
     logger.info("Reading input BAM")
     for read in bamfile.fetch(until_eof=True):
-        n += 1
-        if not n % prog_interval:
-            logger.info("Reading input: {:,} records read.".format(n))
         if read.is_secondary or read.is_supplementary:
             continue
         match = rid_to_coord_re.match(read.query_name)
@@ -152,11 +151,13 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
         if chrom in contam_contigs:
             is_contam = True
             rtype = 'CONTAM'
+            contam_total += 1
         elif chrom in ref_contigs:
             if chrom in decoys: 
                 continue
             is_contam = False
             rtype = 'REF'
+            ref_total += 1
         else:
             if chrom not in warned_contigs:
                 logger.warn("Could not determine origin of " +
@@ -165,6 +166,11 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
                             "files?")
                 warned_contigs.add(chrom)
             continue
+        n += 1
+        if not n % prog_interval:
+            logger.info("Reading input: {:,} primary alignments ".format(n) + 
+                        "read, {:,} reference, {:,} contaminants."
+                        .format(contam_total, ref_total))
         read_length = read.infer_query_length() or read.query_length
         ref_cigar = read.get_tag('ZC')
         if bfinder:
@@ -197,7 +203,9 @@ def read_bam(bam, ref, logger, expect_values, decoys, avoid_bed=None,
         e = e if e < len(expect_values) else e - 1
         counts[expect_values[e]][rtype] += 1
     bamfile.close()
-    logger.info("Finished parsing {:,} reads.".format(n))
+    logger.info("Finished parsing {:,} primary alignments (".format(n) + 
+                        "{:,} reference, {:,} contaminants)."
+                        .format(contam_total, ref_total))
     return counts
 
 def get_logger(debug=False, quiet=False, logfile=None):
