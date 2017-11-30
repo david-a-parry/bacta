@@ -23,7 +23,7 @@ from bacta.benchmark_utils import contigs_from_fasta, write_table
 from bacta.benchmark_utils import report_precision_recall
 from bedfinder import BedFinder
 
-def test_expect(bam, output, ref, expect_values, prog_interval, 
+def test_expect(bam, output, ref, prog_interval, n_expect=50, upper_expect=1e6, 
                 decoy_contigs=[], avoid_regions=None, debug=False, quiet=False, 
                 logfile=None):
     ''' 
@@ -32,10 +32,8 @@ def test_expect(bam, output, ref, expect_values, prog_interval,
         sensitivity/specificity at differing 'expect' values. Produces a table 
         and plots.
     '''
-    expect_values.sort()
-    if min(expect_values) < 0.0:
-        raise RuntimeError("Error in arguments: --expect_values values can " +
-                           "not be below 0.0")
+    expect_values = np.append(np.array(0), np.geomspace(1, upper_expect, 
+                                                        n_expect))
     table_fn = output + ".tsv"
     table_out = open(table_fn, "wt")
     logger = get_logger(debug=debug, quiet=quiet, logfile=logfile)
@@ -298,14 +296,17 @@ def get_parser():
                                required=True,
                                help='''Prefix for plot and table output 
                                        files.''')
-    optional_args.add_argument('-e', '--expect_values', type=float, nargs='+', 
-                               metavar='E', default=[0, 1, 5, 10, 50, 100, 500,
-                                                     1000, 2000, 5000, 10000,
-                                                     20000, 50000, 100000],
-                               help='''Expect values thesholds to test. 
-                                       Default=[1, 5, 10, 50, 100, 500, 1000, 
-                                       2000, 5000, 10000, 20000, 50000, 100000]
+    optional_args.add_argument('-n', '--n_expect', metavar='N', type=int,
+                               default=50,
+                               help='''Number of expect values to test. The set
+                                       of expect values are generated between 1
+                                       and --upper_expect (see below) evenly 
+                                       spaced along a log scale. Default=50.
                                     ''')
+    optional_args.add_argument('-u', '--upper_expect', metavar='U', type=float,
+                               default=1e6,
+                               help='''Upper limit of expect values to test.
+                                       Default = 1e6.''')
     optional_args.add_argument('-d', '--decoy_contigs', nargs='+', 
                                metavar='CONTIG', 
                                default=['hs37d5', 'NC_007605'],
