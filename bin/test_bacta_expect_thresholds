@@ -56,8 +56,8 @@ def write_plots(df, prefix, logger):
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         lw = 2
         plt.title("Fraction per Classification")
-        plt.plot(df.Threshold, df.FP/total_ref)
-        plt.plot(df.Threshold, df.TP/total_contam)
+        plt.plot(df.Threshold, df.FP/total_ref, marker='o')
+        plt.plot(df.Threshold, df.TP/total_contam, marker='o')
         plt.yscale('log')
         plt.xscale('log')
         plt.xlabel('Expect Difference Cutoff')
@@ -67,8 +67,8 @@ def write_plots(df, prefix, logger):
         #zoomed y axis for TPs
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Fraction per Classification")
-        plt.plot(df.Threshold, df.FP/total_ref)
-        plt.plot(df.Threshold, df.TP/total_contam)
+        plt.plot(df.Threshold, df.FP/total_ref, marker='o')
+        plt.plot(df.Threshold, df.TP/total_contam, marker='o')
         plt.xscale('log')
         diff_y = max(df.TP/total_contam) - min(df.TP/total_contam)
         plt.ylim(min(df.TP/total_contam) - (0.1 * diff_y), 
@@ -80,8 +80,8 @@ def write_plots(df, prefix, logger):
         
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Number of Reads per Classification")
-        plt.plot(df.Threshold, df.FP)
-        plt.plot(df.Threshold, df.TP)
+        plt.plot(df.Threshold, df.FP, marker='o')
+        plt.plot(df.Threshold, df.TP, marker='o')
         plt.yscale('log')
         plt.xscale('log')
         plt.xlabel('Expect Difference Cutoff')
@@ -91,8 +91,8 @@ def write_plots(df, prefix, logger):
         #zoomed y axis for TPs
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Number of Reads per Classification")
-        plt.plot(df.Threshold, df.FP)
-        plt.plot(df.Threshold, df.TP)
+        plt.plot(df.Threshold, df.FP, marker='o')
+        plt.plot(df.Threshold, df.TP, marker='o')
         plt.xlabel('Expect Difference Cutoff')
         plt.ylabel('Reads')
         plt.xscale('log')
@@ -106,7 +106,7 @@ def write_plots(df, prefix, logger):
         logger.info("Writing ROC curve...")
         n = 0
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, 
+        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, marker='o',
                      label='ROC curve (area = {:g})'.format(roc_auc))
         plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
         plt.xlim([0.0, 1.0])
@@ -116,6 +116,20 @@ def write_plots(df, prefix, logger):
         plt.title('Receiver operating characteristic for expect thresholds')
         plt.legend(loc="lower right")
         pdf.savefig()
+        #zoomed y-axis
+        plt.figure(figsize=(11.7, 8.27), dpi=300)
+        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, marker='o',
+                     label='ROC curve (area = {:g})'.format(roc_auc))
+        plt.xlim([0.0, 1.0])
+        diff_y = max(df['Sensitivity']) - min(df['Sensitivity'])
+        plt.ylim(min(df['Sensitivity']) - diff_y * 0.1, 
+                 max(df['Sensitivity']) + diff_y * 0.1)
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Receiver operating characteristic for expect thresholds')
+        plt.legend(loc="lower right")
+        pdf.savefig()
+
         logger.info("Finished generating plots")
 
 
