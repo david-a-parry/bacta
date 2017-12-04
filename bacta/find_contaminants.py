@@ -919,7 +919,7 @@ class BamAnalyzer(object):
                                          "OLDEXPECT", "CIGAR", "OLDCIGAR", 
                                          "OLDPOS", "CONTIG", "POS", 
                                          "MATE_CONTIG", "MATE_POS", "MAPQ",
-                                         "OLD_MAPQ")) + "\n")
+                                         "OLD_MAPQ", "MD", "OLD_MD")) + "\n")
         dash = '-' #subprocess doesn't seem to like '-' passed as a string
         samwrite = Popen([self.samtools, 'view', '-Sbh', dash], stdout=bam_out, 
                         stdin=PIPE, bufsize=-1)
@@ -974,27 +974,29 @@ class BamAnalyzer(object):
             if self.paired:
                 if split[0] in pairs:
                     (p_split, p_score, p_old_score, p_e, p_old_e, p_old_cigar, 
-                     p_old_pos, p_old_mapq) = pairs[split[0]]
+                     p_old_pos, p_old_mapq, p_md, p_old_md) = pairs[split[0]]
                     if (score + p_score >= self.min_aligned_score *2 and
                         (old_e * p_old_e)/(e * p_e) >= self.min_expect_diff):
                         self.write_contam_summary(contam_out, score, 
                                                   old_score, e, old_e,
                                                   split, old_cigar, old_pos, 
-                                                  old_mapq)
+                                                  old_mapq, md, old_md)
                         self.write_contam_summary(contam_out, p_score, 
                                                   p_old_score, p_e, p_old_e, 
                                                   p_split, p_old_cigar, 
-                                                  p_old_pos, p_old_mapq) 
+                                                  p_old_pos, p_old_mapq, p_md, 
+                                                  p_old_md)
                     del pairs[split[0]]
                 else:
                     pairs[split[0]] = (split, score, old_score, e, old_e, 
-                                       old_cigar, old_pos, old_mapq)
+                                       old_cigar, old_pos, old_mapq, md, old_md
+                                      )
             else:
                 if (score >= self.min_aligned_score and
                     old_e/e >= self.min_expect_diff):
                     self.write_contam_summary(contam_out, score, old_score, e, 
                                               old_e, split, old_cigar, old_pos,
-                                              old_mapq)
+                                              old_mapq, md, old_md)
         contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
@@ -1021,7 +1023,7 @@ class BamAnalyzer(object):
         return read_length * ref_length * 2**-score
 
     def write_contam_summary(self, fh, score, old_score, e, old_e, record, 
-                             old_cigar, old_pos, old_mapq):
+                             old_cigar, old_pos, old_mapq, md, old_md):
         ''' Write a summary of a contaminant read to fh. '''
         if int(record[1]) & 2: #pair_mapped
             mate_coord = (record[6] if record[6] != '=' else record[2], 
@@ -1035,7 +1037,7 @@ class BamAnalyzer(object):
                                  str.format("{:g}", old_e),
                                  record[5], old_cigar, old_pos, record[2], 
                                  record[3], mate_coord[0], mate_coord[1],
-                                 record[4], old_mapq))
+                                 record[4], old_mapq, md, old_md))
                          + "\n")
 
     def _check_bam_index(self):
