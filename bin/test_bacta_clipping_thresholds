@@ -24,14 +24,18 @@ from bedfinder import BedFinder
 
 rid_to_coord_re = re.compile(r'''^(\S+)_(\d+)_(\d+)(_\d+){5}:''')
 
-def test_clipping(bam, output, ref, contaminant_ref, thresholds, 
-                  prog_interval, threads, decoy_contigs=[], avoid_regions=None,
-                  debug=False, quiet=False, logfile=None):
+def test_clipping(bam, output, ref, contaminant_ref, n_clip=50, upper_clip=1.0,
+                  prog_interval=1000000, threads=1, decoy_contigs=[], 
+                  avoid_regions=None, debug=False, quiet=False, logfile=None):
     ''' 
         Read BAM of simulated reference and contaminant reads (generated
         by DWGSIM) and test sensitivity/specificity at differing 
         clipping thresholds. Produces a table and plots.
     '''
+    if upper_clip > 1.0:
+        raise RuntimeError("Error in arguments: --thresholds values can not " +
+                           "be greater than 1.0")
+    thresholds = np.linspace(0, upper_clip, n_clip)
     ref_contigs = contigs_from_fasta(ref)
     contam_contigs = contigs_from_fasta(contaminant_ref)
     if ref_contigs.intersection(contam_contigs):
@@ -41,13 +45,6 @@ def test_clipping(bam, output, ref, contaminant_ref, thresholds,
                           sorted(ref_contigs.intersection(contam_contigs))))
     decoys = set(decoy_contigs)
     bamfile = get_bamfile(bam) 
-    if min(thresholds) < 0.0:
-        raise RuntimeError("Error in arguments: --thresholds values can not " +
-                           "be below 0.0")
-    if max(thresholds) > 1.0:
-        raise RuntimeError("Error in arguments: --thresholds values can not " +
-                           "be greater than 1.0")
-    thresholds.sort()
     table_fn = output + ".tsv"
     table_out = open(table_fn, "wt")
     results = []
@@ -99,8 +96,8 @@ def write_plots(df, prefix, logger):
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         lw = 2
         plt.title("Fraction per Classification")
-        plt.plot(df.Threshold, df.FP/total_ref)
-        plt.plot(df.Threshold, df.TP/total_contam)
+        plt.plot(df.Threshold, df.FP/total_ref, marker='o')
+        plt.plot(df.Threshold, df.TP/total_contam, marker='o')
         plt.xlabel('Threshold')
         plt.ylabel('Fraction')
         plt.legend(['FP', 'TP'], loc="right")
@@ -108,8 +105,8 @@ def write_plots(df, prefix, logger):
         
         plt.figure(figsize=(11.7, 8.27), dpi=300)
         plt.title("Number of Reads per Classification")
-        plt.plot(df.Threshold, df.FP)
-        plt.plot(df.Threshold, df.TP)
+        plt.plot(df.Threshold, df.FP, marker='o')
+        plt.plot(df.Threshold, df.TP, marker='o')
         plt.xlabel('Threshold')
         plt.ylabel('Reads')
         plt.legend(['FP', 'TP'], loc="right")
@@ -119,7 +116,7 @@ def write_plots(df, prefix, logger):
         logger.info("Writing ROC curve...")
         n = 0
         plt.figure(figsize=(11.7, 8.27), dpi=300)
-        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, 
+        plt.plot(df['1-Specificity'], df['Sensitivity'], lw=lw, marker='o',
                      label='ROC curve (area = {:g})'.format(roc_auc))
         plt.plot([0, 1], [0, 1], color='black', lw=lw, linestyle=':')
         plt.xlim([0.0, 1.0])
@@ -312,14 +309,18 @@ def get_parser():
                                required=True,
                                help='''Prefix for plot and table output 
                                        files.''')
-    optional_args.add_argument('-t', '--thresholds', type=float, nargs='+', 
-                               metavar='FRAC', default=[0, 0.02, 0.05, 0.075, 
-                                                     0.10, 0.12, 0.15, 0.175,
-                                                     0.2, 0.5, 0.75, 0.9, 1.0],
-                               help='''Clipping thesholds to test. 
-                                        Default=[0, 0.02, 0.05, 0.075, 0.10, 
-                                        0.12, 0.15, 0.175, 0.2, 0.5, 0.75, 0.9,
-                                        1.0]''')
+    optional_args.add_argument('-n', '--n_clip', metavar='N', type=int,
+                               default=50,
+                               help='''Number of clip values to test. The set
+                                       of clip values are generated between 0
+                                       and --upper_clip (see below) evenly 
+                                       spaced. Default=50.
+                                    ''')
+    optional_args.add_argument('-u', '--upper_clip', metavar='U', type=float,
+                               default=1.0,
+                               help='''Upper limit of clip values to test. Must
+                                       not be greater than 1.0. Default = 1.0.
+                                    ''')
     optional_args.add_argument('-d', '--decoy_contigs', nargs='+', 
                                metavar='CONTIG', 
                                default=['hs37d5', 'NC_007605'],
