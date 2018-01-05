@@ -1,6 +1,7 @@
 import sys
 import os
 import pandas as pd
+import numpy as np
 from io import StringIO
 
 def write_table(counts, fh):
@@ -39,6 +40,16 @@ def write_table(counts, fh):
     df.to_csv(fh, sep='\t', index=False)
     fh.close()
     return df
+
+def calculate_average_precision(df, logger):
+    '''Calculate average precision from recall/sensitivity and precision'''
+    # our dataframe is backwards with highest sensitivity first - reverse it
+    # for iterations
+    lowest_sens = df['Sensitivity'][df.last_valid_index()]
+    sdiff = np.append(lowest_sens, np.diff(df.Sensitivity[::-1]))
+    p_a = sum( np.nan_to_num(df.Precision[::-1]) * sdiff)
+    logger.info("Average Precision = {:g}".format(p_a))
+    return p_a
 
 def report_precision_recall(df, logger):
     for row in df.itertuples():
