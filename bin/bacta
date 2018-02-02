@@ -75,6 +75,18 @@ def get_parser():
                                        bases for a read to be analyzed as a 
                                        potential contaminant. This overrides
                                        the --min_fraction_clipped argument.''')
+    optional_args.add_argument('-E', '--min_expect_diff', metavar='FLOAT', 
+                                type=float, default=1000.,
+                               help='''Minimum ratio difference in expect value
+                                       between alignment to reference genome 
+                                       compared to contaminant genome. That is,
+                                       if set to 10, a read must have an expect 
+                                       probability 10x lower for the 
+                                       contaminant genome compared to the 
+                                       reference genome before it is considered
+                                       a contaminant. For paired reads, the 
+                                       product of both pairs scores are 
+                                       compared. Default=1000.''')
     optional_args.add_argument('-f', '--fastqs', metavar='PREFIX', 
                                help='''Prefix for fastq files created from 
                                        reads that are tested for contamination.
