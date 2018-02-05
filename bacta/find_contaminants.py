@@ -935,11 +935,11 @@ class BamAnalyzer(object):
             flag = int(split[1])
             if flag & 256 or flag & 2048: #not primary/supplementary 
                 continue
-            old_cigar = ''
-            old_pos = ''
-            old_md = ''
-            old_mapq = ''
-            md = ''
+            old_cigar = '.'
+            old_pos = '.'
+            old_md = '.'
+            old_mapq = '.'
+            md = '.'
             for tag in split[:10:-1]:
                 match = md_re.match(tag)
                 if match:
@@ -1026,8 +1026,8 @@ class BamAnalyzer(object):
                              old_cigar, old_pos, old_mapq, md, old_md):
         ''' Write a summary of a contaminant read to fh. '''
         if int(record[1]) & 2: #pair_mapped
-            mate_coord = (record[6] if record[6] != '=' else record[2], 
-                          record[7])
+            mate_coord = ((record[2], record[6]) if record[6] != '=' 
+                            else (record[2], record[7]))
         else:
             mate_coord = ('.', '.')
         #format is: ReadID, Score, OldScore, CIGAR, OldCigar, 
