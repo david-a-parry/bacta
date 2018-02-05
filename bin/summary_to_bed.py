@@ -1,0 +1,66 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import os
+import warnings
+import re
+import logging
+from bacta.cigar_scorer import CigarScorer
+from bacta.find_contaminants import length_from_fai
+
+def get_parser():
+    '''Get ArgumentParser'''
+    parser = argparse.ArgumentParser(
+                  description='''For the contaminant summary file generated 
+                                 by BACTA output a BED of original mapping 
+                                 coordinates for each read.''')
+    parser.add_argument('summary', metavar='contaminant_summary.txt',
+                        help='''Input filename. This should be the output 
+                                contaminant summary from BACTA.''')
+    parser.add_argument('-q', '--mapq', type=float,
+                        help='''Minimum original MAPQ to emit.''')
+    return parser
+
+def get_column_names(header, required):
+    name_to_col = dict(((x,y) for y,x in enumerate(header.split())))
+    for req in required: 
+        if req not in name_to_col:
+            raise RuntimeError("Required column '{}' not found in header"
+                                .format(req))
+    return name_to_col
+
+def main(summary, mapq=None):
+    if summary.endswith('.gz'):
+        open_func = gzip.open
+    else:
+        open_func = open
+    with open_func(summary, 'rt') as infile:
+        req_col = ("#ID", "OLDPOS", "OLDCIGAR", "OLD_MAPQ")
+        columns = get_column_names(infile.readline().rstrip(), req_col)
+        pos_to_coord_re = re.compile(r'''^(\S+):(\d+)$''')
+        cigar_scorer = CigarScorer()
+        for line in infile:
+            split = line.rstrip().split("\t")
+            try:
+                values = dict(((k, split[columns[k]]) for k in req_col))
+            except IndexError as e:
+                warnings.warn("Error parsing columns for line: {}\n{}"
+                              .format(line.rstrip(), e))
+                continue
+            aligned_length = cigar_scorer.get_aligned_length(
+                cigar_scorer.cigarstring_to_tuples(values['OLDCIGAR']))
+            match = pos_to_coord_re.match(values['OLDPOS'])
+            if match and aligned_length:
+                if mapq is not None and float(values['OLD_MAPQ']) < mapq: 
+                    continue
+                chrom = match.group(1)
+                start = int(match.group(2)) - 1 #0-based BED coordinate
+                end = start + aligned_length 
+                print("{}\t{}\t{}\t{}".format(chrom, start, end, values['#ID'])
+                )
+            
+
+if __name__ == '__main__':
+    parser = get_parser()
+    args = parser.parse_args()
+    main(**vars(args))
