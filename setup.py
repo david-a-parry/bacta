@@ -13,7 +13,10 @@ setup(
     install_requires=[
           'pysam>=0.12.0',
       ],
-    scripts = ["bin/bacta", "bin/contam_reads_to_fastq"],
+    scripts = ["bin/bacta", "bin/contam_reads_to_fastq", "bin/summary_to_bed",
+               "bin/test_bacta_clipping_thresholds", 
+                "bin/test_bacta_expect_thresholds",
+        ],
     classifiers = [
         "Programming Language :: Python :: 3",
         "Development Status :: 1 - Planning",
