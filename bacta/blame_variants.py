@@ -1,6 +1,8 @@
 import sys
 import os
 import re
+import logging
+import gzip
 import pysam
 from .alignment_file_utils import get_bamfile
 from parse_vcf import VcfReader
@@ -24,7 +26,7 @@ class BlameVariants(object):
     def read_contam_file(self, contamfile):
         self.contam_ids = set()
         with open(contamfile, 'rt') as infile:
-            header = line.rstrip().split()
+            header = next(infile).rstrip().split()
             indices = dict()
             for field in ('#ID', 'EXPECT', 'OLDEXPECT', 'OLD_MAPQ'):
                 if field not in header:
@@ -65,11 +67,31 @@ class BlameVariants(object):
             self.outfile = open(self.output, 'wt')
         else:
             self.outfile = sys.stdout
+        self.write_header()
         if self.bed is not None:
             self.parse_with_bed()
         else:
             for var in self.vcf.parser:
                 self.check_variant(var)
+
+    def write_header(self):
+        self.vcf.header.add_header_field(
+                name='BactaContamSupport', 
+                dictionary={'Number' : 'A', 
+                             'Type' : 'Integer',
+                             'Description' : 'Number of contaminant reads ' +
+                                             'supporting ALT allele according'+
+                                             ' to BACTA'''},
+                field_type='INFO')
+        self.vcf.header.add_header_field(
+                name='BactaNonContamSupport', 
+                dictionary={'Number' : 'A', 
+                             'Type' : 'Integer',
+                             'Description' : 'Number of non-contaminant reads'+
+                                             ' supporting ALT allele '+ 
+                                             'according to BACTA'},
+                field_type='INFO')
+        self.outfile.write(str(self.vcf.header))
 
     def parse_with_bed(self):
         if self.bed.endswith((".gz", ".bgz")):
@@ -80,13 +102,13 @@ class BlameVariants(object):
             if line[0] == '#': 
                 continue
             cols = line.rstrip().split()
-            v.set_region(cols[0], cols[1], cols[2])
+            self.vcf.set_region(cols[0], int(cols[1]), int(cols[2]))
             for var in self.vcf.parser:
                 self.check_variant(var)
         bedfile.close()
 
     def check_variant(self, var):
-        if len(var.ALLLELES) != 2: #biallelic only
+        if len(var.ALLELES) != 2: #biallelic only
             return
         if len(var.ALLELES[0]) != 1 or len(var.ALLELES[1]) != 1: #SNV only
             return
@@ -108,5 +130,7 @@ class BlameVariants(object):
                         supporting_non_contam += 1
             break #can skip now we've hit our SNV position
         if supporting_contam:
-            self.outfile.write(str(var) + "\t{}\t{}".format(supporting_contam, 
-                               supporting_non_contam) + "\n")
+            var.add_info_fields({"BactaContamSupport"   : supporting_contam,
+                                 "BactaNonContamSupport": supporting_non_contam
+                                })
+            self.outfile.write(str(var) + "\n")
