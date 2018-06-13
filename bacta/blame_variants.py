@@ -13,9 +13,10 @@ class BlameVariants(object):
     '''
 
     def __init__(self, contaminants, variants, bam, bed=None, output=None, 
-                 mapq=0, quiet=False, debug=False):
+                 mapq=0, contam_ratio=0.0, quiet=False, debug=False):
         self.logger = self._get_logger(quiet, debug)
         self.mapq = mapq
+        self.contam_ratio = contam_ratio
         self.read_contam_file(contaminants)
         self.vcf = VcfReader(variants)
         self.bamfile = get_bamfile(bam)
@@ -25,6 +26,7 @@ class BlameVariants(object):
 
     def read_contam_file(self, contamfile):
         self.contam_ids = set()
+        self.contam_below_mapq = set()
         with open(contamfile, 'rt') as infile:
             header = next(infile).rstrip().split()
             indices = dict()
@@ -38,8 +40,9 @@ class BlameVariants(object):
             for line in infile:
                 cols = line.rstrip().split()
                 if self.mapq and int(cols[indices['OLD_MAPQ']]) < self.mapq: 
-                    continue
-                self.contam_ids.add(cols[indices['ID']])
+                    self.contam_below_mapq.add(cols[indices['ID']])
+                else:
+                    self.contam_ids.add(cols[indices['ID']])
         infile.close()  
 
     def _get_logger(self, quiet=False, debug=False):
@@ -108,29 +111,41 @@ class BlameVariants(object):
         bedfile.close()
 
     def check_variant(self, var):
-        if len(var.ALLELES) != 2: #biallelic only
-            return
-        if len(var.ALLELES[0]) != 1 or len(var.ALLELES[1]) != 1: #SNV only
-            return
-        pileup_iter = self.bamfile.pileup(var.CHROM, var.POS-1, var.POS)
-        supporting_contam = 0
-        supporting_non_contam = 0
-        for x in pileup_iter: 
-            #pysam positions are 0-based
-            if x.reference_pos != var.POS - 1: 
+        write_record = False
+        i = 0
+        contam = []
+        non_contam = []
+        for alt in var.DECOMPOSED_ALLELES:
+            if len(alt.REF) != 1 and len(alt.ALT) != 1: #SNVs only
                 continue
-            for p in x.pileups:
-                if p.is_del or p.is_refskip:
+            pileup_iter = self.bamfile.pileup(alt.CHROM, alt.POS-1, alt.POS)
+            supporting_contam = 0
+            supporting_non_contam = 0
+            for x in pileup_iter: 
+                #pysam positions are 0-based
+                if x.reference_pos != var.POS - 1: 
                     continue
-                seq = p.alignment.seq[p.query_position:p.query_position + 1]
-                if seq == var.ALLELES[1]:
-                    if p.alignment.query_name in self.contam_ids:
-                        supporting_contam += 1
-                    else:
-                        supporting_non_contam += 1
-            break #can skip now we've hit our SNV position
-        if supporting_contam:
-            var.add_info_fields({"BactaContamSupport"   : supporting_contam,
-                                 "BactaNonContamSupport": supporting_non_contam
+                for p in x.pileups:
+                    if p.is_del or p.is_refskip:
+                        continue
+                    if p.alignment.is_duplicate or p.alignment.is_secondary:
+                        continue
+                    seq = p.alignment.seq[p.query_position:p.query_position + 1]
+                    if seq == alt.ALT:
+                        query_name = p.alignment.query_name 
+                        if query_name in self.contam_ids:
+                            supporting_contam += 1
+                        elif query_name not in self.contam_below_mapq:
+                            supporting_non_contam += 1
+                break #can skip now we've hit our SNV position
+            if supporting_contam:
+                dp = supporting_non_contam + supporting_contam
+                if supporting_contam/dp >= self.contam_ratio: 
+                    write_record=True
+            contam.append(supporting_contam)
+            non_contam.append(supporting_non_contam)
+        if write_record:
+            var.add_info_fields({"BactaContamSupport"   : contam,
+                                 "BactaNonContamSupport": non_contam
                                 })
             self.outfile.write(str(var) + "\n")

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import sys
 import os
 import argparse
@@ -25,6 +25,10 @@ def get_parser():
                            read. Contaminant reads with an original mapping 
                            quality below this value will be ignored. Default=0.
                         ''')
+    parser.add_argument('-c', '--contam_ratio', type=float, default=0.0, help=
+                        '''Minimum ratio of contaminant reads supporting an
+                           SNV versus total reads supporting an SNV for a 
+                           variant to be written to output. Default-0.0.''')
     parser.add_argument('-o', '--output', help=
                         '''Output file for table of variants and contaminant 
                            ratios. Defaults to STDOUT.''')
