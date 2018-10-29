@@ -12,7 +12,7 @@ def write_table(counts, fh):
     #...then results
     for t in sorted(counts.keys()):
         table += "{:g}\t".format(t)
-        table += str.join("\t", (str.format("{:.3g}", counts[t][x]) 
+        table += str.join("\t", (str.format("{:.3g}", counts[t][x])
                                  for x in sorted(counts[t]))) + "\n"
     #use table string as input to pandas to create dataframe
     tab = StringIO(table)
@@ -24,10 +24,10 @@ def write_table(counts, fh):
     tr = 0
     cum_contam = []
     cum_ref = []
-    for ref in reversed(df.REF): 
+    for ref in reversed(df.REF):
         tr += ref
         cum_ref.append(tr)
-    for contam in reversed(df.CONTAM): 
+    for contam in reversed(df.CONTAM):
         tc += contam
         cum_contam.append(tc)
     cum_contam.reverse()
@@ -68,7 +68,7 @@ def contigs_from_fasta(fasta):
             c = line.split()[0]
             if c in contigs:
                 sys.exit("ERROR: Fasta index '{}' appears to be malformed."
-                         .format(fai) + " Contig {} was found more than once" 
+                         .format(fai) + " Contig {} was found more than once"
                          .format(c))
             contigs.add(c)
     return contigs

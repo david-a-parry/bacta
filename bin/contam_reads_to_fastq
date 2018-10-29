@@ -11,7 +11,7 @@ from bacta.cigar_scorer import CigarScorer
 from bacta.alignment_file_utils import get_bamfile
 
 def calc_expect(score, read_length, ref_length):
-    ''' 
+    '''
         Crude approximation of E-value which should be acceptable
         when comparing identical sequences and long references.
     '''
@@ -30,18 +30,18 @@ def length_from_fai(fasta):
                 l += int(line.split()[1])
             except ValueError:
                 sys.exit("ERROR: Fasta index '{}' appears to be malformed."
-                         .format(fai) + " Could not determine sequence " + 
+                         .format(fai) + " Could not determine sequence " +
                          "length for line:\n{}".format(line))
     return l
-     
-def contam_reads_to_fastq(bam, output, ref, min_aligned_score=50, 
+
+def contam_reads_to_fastq(bam, output, ref, min_aligned_score=50,
                           min_expect_diff=1000, prog_interval=100000):
     bamfile = get_bamfile(bam)
     bam_ref_length = sum(bamfile.lengths)
     ref_length = length_from_fai(ref)
     fq_writer = Read2Fastq(output + '.r1.fastq.gz', output + '.r2.fastq.gz',
                            set() )
-    #'ZC' = old cigar 
+    #'ZC' = old cigar
     #'ZM' = old MD tag
     #'MD' = current MD tag
     pairs = dict()
@@ -95,38 +95,38 @@ def get_parser():
                   add_help=False)
     required_args = parser.add_argument_group('Required Arguments')
     optional_args = parser.add_argument_group('Optional Arguments')
-    required_args.add_argument('-i', '--bam', '--input', required=True, 
-                               metavar='BAM', 
+    required_args.add_argument('-i', '--bam', '--input', required=True,
+                               metavar='BAM',
                                help='''Input BAM filename. This should be the
                                        contaminant BAM produced by BACTA.''')
-    required_args.add_argument('-r', '--ref', required=True, metavar='REF', 
-                               help='''Reference fasta file containing 
+    required_args.add_argument('-r', '--ref', required=True, metavar='REF',
+                               help='''Reference fasta file containing
                                        original (i.e. non-contaminant)
-                                       sequences. This file must have been 
+                                       sequences. This file must have been
                                        indexed by samtools.''')
-    required_args.add_argument('-o', '--output', metavar='FQ_PREFIX', 
+    required_args.add_argument('-o', '--output', metavar='FQ_PREFIX',
                                required=True,
                                help='''Prefix for FASTQ output files.''')
-    optional_args.add_argument('-a', '--min_aligned_score', type=int, 
+    optional_args.add_argument('-a', '--min_aligned_score', type=int,
                                default=50, metavar='SCORE',
-                               help='''Minimum aligned score for a read to be 
+                               help='''Minimum aligned score for a read to be
                                        considered a potential contaminant.
                                        Default=50''')
-    optional_args.add_argument('-e', '--min_expect_diff', type=float, 
+    optional_args.add_argument('-e', '--min_expect_diff', type=float,
                                default=1000, metavar='SCORE',
-                               help='''Minimum factor difference in expect 
-                                       scores between original alignment and 
-                                       alignment to contaminant reference. A 
-                                       value of 10 would mean that the expect 
-                                       score for an alignment to a contaminant 
-                                       sequence must be 10 times greater than 
-                                       the expect score against the 
+                               help='''Minimum factor difference in expect
+                                       scores between original alignment and
+                                       alignment to contaminant reference. A
+                                       value of 10 would mean that the expect
+                                       score for an alignment to a contaminant
+                                       sequence must be 10 times greater than
+                                       the expect score against the
                                        non-contaminant genome. Default=1000''')
     optional_args.add_argument('-p', '--prog_interval', type=int, metavar='N',
-                               default=100000, 
-                               help='''Report progress every N reads. 
+                               default=100000,
+                               help='''Report progress every N reads.
                                Default=100000''')
-    optional_args.add_argument('-h', '--help', action='help', 
+    optional_args.add_argument('-h', '--help', action='help',
                                help='''show this help message and exit''')
 
     return parser

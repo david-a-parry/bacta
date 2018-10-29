@@ -11,129 +11,129 @@ def get_parser():
                   add_help=False)
     required_args = parser.add_argument_group('Required Arguments')
     optional_args = parser.add_argument_group('Optional Arguments')
-    required_args.add_argument('-i', '--bam', '--input', required=True, 
+    required_args.add_argument('-i', '--bam', '--input', required=True,
                                metavar='BAM', help='''Input BAM filename''')
-    required_args.add_argument('-r', '--ref', required=True, metavar='REF', 
-                               help='''Reference fasta file containing 
-                                       potential contaminant sequences. This 
-                                       file must have been indexed by BWA and 
+    required_args.add_argument('-r', '--ref', required=True, metavar='REF',
+                               help='''Reference fasta file containing
+                                       potential contaminant sequences. This
+                                       file must have been indexed by BWA and
                                        samtools.''')
-    optional_args.add_argument('-o', '--output', metavar='BAM', 
-                               help='''Write cleaned output BAM to this file. 
-                                       If specified, a new BAM file without 
+    optional_args.add_argument('-o', '--output', metavar='BAM',
+                               help='''Write cleaned output BAM to this file.
+                                       If specified, a new BAM file without
                                        contaminating reads will be created.''')
-    optional_args.add_argument('-c', '--contaminants', metavar='PREFIX', 
-                               help='''Prefix for contaminant output files. 
-                                       Defaults to the basename of the input + 
+    optional_args.add_argument('-c', '--contaminants', metavar='PREFIX',
+                               help='''Prefix for contaminant output files.
+                                       Defaults to the basename of the input +
                                        "_contaminants".''')
-    optional_args.add_argument('-u', '--unaligned', action='store_true', 
-                               help='''Also test unmapped reads with unmapped 
+    optional_args.add_argument('-u', '--unaligned', action='store_true',
+                               help='''Also test unmapped reads with unmapped
                                        mates (or simply unmapped reads if input
                                        is from single-end reads).''')
-    optional_args.add_argument('-d', '--decoy_contigs', nargs='+', 
+    optional_args.add_argument('-d', '--decoy_contigs', nargs='+',
                                metavar='CONTIG', default=[],
-                               help='''Names of decoy contigs from input BAM. 
+                               help='''Names of decoy contigs from input BAM.
                                        If specified, any reads mapped to these
-                                       contigs will be tested regardless of 
-                                       clipping. For scoring purposes, these 
-                                       reads will be treated as if 
+                                       contigs will be tested regardless of
+                                       clipping. For scoring purposes, these
+                                       reads will be treated as if
                                        unmapped.''')
-    optional_args.add_argument('-v', '--vcf', metavar='VCF', 
-                               help='''VCF file of candidate variants 
-                                       introduced by contamination. If provided 
-                                       the input BAM will be scanned for reads 
-                                       that overlap these reads plus the value 
-                                       of --flanks instead of processing the 
+    optional_args.add_argument('-v', '--vcf', metavar='VCF',
+                               help='''VCF file of candidate variants
+                                       introduced by contamination. If provided
+                                       the input BAM will be scanned for reads
+                                       that overlap these reads plus the value
+                                       of --flanks instead of processing the
                                        whole BAM file.''')
-    optional_args.add_argument('--flanks', metavar='FLANKS', type=int, 
+    optional_args.add_argument('--flanks', metavar='FLANKS', type=int,
                                default=500,
-                               help='''Amount of bp up and downstream of 
-                                       candidate variants (from --vcf argument) 
+                               help='''Amount of bp up and downstream of
+                                       candidate variants (from --vcf argument)
                                        to scan for reads. Default=500.''')
-    optional_args.add_argument('--regions', metavar='REGIONS', nargs='+', 
+    optional_args.add_argument('--regions', metavar='REGIONS', nargs='+',
                                default=[],
-                               help='''List of regions (in format chr1:1-1000) 
+                               help='''List of regions (in format chr1:1-1000)
                                        to scan rather than processing the whole
                                        BAM file.''')
-    optional_args.add_argument('-b', '--bwa', metavar='BWA', 
-                               help='''Location of bwa executable. Only 
+    optional_args.add_argument('-b', '--bwa', metavar='BWA',
+                               help='''Location of bwa executable. Only
                                        required if not in your PATH.''')
-    optional_args.add_argument('-s', '--samtools', metavar='SAMTOOLS', 
-                               help='''Location of samtools (v1.3 or newer) 
+    optional_args.add_argument('-s', '--samtools', metavar='SAMTOOLS',
+                               help='''Location of samtools (v1.3 or newer)
                                        executable. Only required if not in your
                                        PATH.''')
-    optional_args.add_argument('-m', '--min_fraction_clipped', metavar='FLOAT', 
+    optional_args.add_argument('-m', '--min_fraction_clipped', metavar='FLOAT',
                                type=float, default=0.15,
-                               help='''Minimum proportion of a read that is 
-                                       hard or soft-clipped or mismatch in the 
-                                       BAM file for a read to be analyzed as a 
+                               help='''Minimum proportion of a read that is
+                                       hard or soft-clipped or mismatch in the
+                                       BAM file for a read to be analyzed as a
                                        potential contaminant. Default = 0.15'''
                               )
-    optional_args.add_argument('-n', '--min_bases_clipped', metavar='INT', 
-                               type=int, default=None, 
+    optional_args.add_argument('-n', '--min_bases_clipped', metavar='INT',
+                               type=int, default=None,
                                help='''Minimum number of hard or soft-clipped
-                                       bases for a read to be analyzed as a 
+                                       bases for a read to be analyzed as a
                                        potential contaminant. This overrides
                                        the --min_fraction_clipped argument.''')
-    optional_args.add_argument('-E', '--min_expect_diff', metavar='FLOAT', 
+    optional_args.add_argument('-E', '--min_expect_diff', metavar='FLOAT',
                                 type=float, default=1000.,
                                help='''Minimum ratio difference in expect value
-                                       between alignment to reference genome 
+                                       between alignment to reference genome
                                        compared to contaminant genome. That is,
-                                       if set to 10, a read must have an expect 
-                                       probability 10x lower for the 
-                                       contaminant genome compared to the 
+                                       if set to 10, a read must have an expect
+                                       probability 10x lower for the
+                                       contaminant genome compared to the
                                        reference genome before it is considered
-                                       a contaminant. For paired reads, the 
-                                       product of both pairs scores are 
+                                       a contaminant. For paired reads, the
+                                       product of both pairs scores are
                                        compared. Default=1000.''')
-    optional_args.add_argument('-f', '--fastqs', metavar='PREFIX', 
-                               help='''Prefix for fastq files created from 
+    optional_args.add_argument('-f', '--fastqs', metavar='PREFIX',
+                               help='''Prefix for fastq files created from
                                        reads that are tested for contamination.
-                                       By default temporary files are created 
-                                       and deleted after the program exits. If 
-                                       this argument is given, these fastq 
-                                       files will be named 
-                                       "<prefix>_r1.fastq.gz" and 
+                                       By default temporary files are created
+                                       and deleted after the program exits. If
+                                       this argument is given, these fastq
+                                       files will be named
+                                       "<prefix>_r1.fastq.gz" and
                                        "<prefix>_r2.fastq.gz" and will persist
                                        after the program exits.''')
-    optional_args.add_argument('--ignore_dups', action='store_true',  
-                               help='''Skip checking of reads marked as 
+    optional_args.add_argument('--ignore_dups', action='store_true',
+                               help='''Skip checking of reads marked as
                                        PCR/optical duplicates''')
-    optional_args.add_argument('-t', '--tmp', metavar='TMPDIR', 
-                               help='''Directory to use for temporary files. 
-                                       If not specified, the system default 
+    optional_args.add_argument('-t', '--tmp', metavar='TMPDIR',
+                               help='''Directory to use for temporary files.
+                                       If not specified, the system default
                                        temporary directory will be used.''')
     optional_args.add_argument('-T', '--threads', type=int, default=1,
-                               help='''Number of threads to use. In order to 
+                               help='''Number of threads to use. In order to
                                        use more than one thread for the initial
                                        read processing step, the input BAM must
-                                       be sorted and indexed and the 
-                                       --no_caching option must NOT be used. 
-                                       Multiple threads can still be used for 
-                                       the BWA alignment step regardless of 
+                                       be sorted and indexed and the
+                                       --no_caching option must NOT be used.
+                                       Multiple threads can still be used for
+                                       the BWA alignment step regardless of
                                        these conditions. Default=1''')
-    optional_args.add_argument('-l', '--log_file', 
+    optional_args.add_argument('-l', '--log_file',
                                help='''Output logging information to this file
                                        (in addition to STDERR).''')
-    optional_args.add_argument('--quiet', action='store_true',  
-                               help='''Only output error and warning logging 
+    optional_args.add_argument('--quiet', action='store_true',
+                               help='''Only output error and warning logging
                                        information.''')
-    optional_args.add_argument('--debug', action='store_true', 
+    optional_args.add_argument('--debug', action='store_true',
                                help='''Output debugging information.''')
-    optional_args.add_argument('--no_caching', action='store_true', 
-                               help='''Do not cache any reads to disk and hold 
-                                       all as yet unpaired reads in memory. By 
-                                       default, reads with a mate mapped to 
-                                       another chomosome are cached to disk and 
-                                       processed after reading the input file. 
-                                       This assumes your reads are sorted in 
-                                       coordinate order. Use this option to 
+    optional_args.add_argument('--no_caching', action='store_true',
+                               help='''Do not cache any reads to disk and hold
+                                       all as yet unpaired reads in memory. By
+                                       default, reads with a mate mapped to
+                                       another chomosome are cached to disk and
+                                       processed after reading the input file.
+                                       This assumes your reads are sorted in
+                                       coordinate order. Use this option to
                                        disable caching if your reads are sorted
-                                       or grouped by read ID rather than 
-                                       coordinate order or if RAM is not a 
+                                       or grouped by read ID rather than
+                                       coordinate order or if RAM is not a
                                        limiting factor.''')
-    optional_args.add_argument('-h', '--help', action='help', 
+    optional_args.add_argument('-h', '--help', action='help',
                                help='''show this help message and exit''')
 
     return parser

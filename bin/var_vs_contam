@@ -7,33 +7,33 @@ from bacta.blame_variants import BlameVariants
 def get_parser():
     '''Get ArgumentParser'''
     parser = argparse.ArgumentParser(
-                  description='''Determine ratio of contaminant reads 
+                  description='''Determine ratio of contaminant reads
                                  responsible for given SNVs.''',
                   add_help=False)
     parser.add_argument("contaminants", help=
                         '''Contaminants table (output from bacta).''')
     parser.add_argument("variants", help='''VCF file to check.''')
     parser.add_argument("bam", help=
-                        '''Original BAM file used as input for variant calling 
+                        '''Original BAM file used as input for variant calling
                            and bacta.''')
     parser.add_argument('-b', '--bed', help=
-                        '''BED file of regions to check instead of checking all 
-                           variants. Overlapping regions should be merged 
+                        '''BED file of regions to check instead of checking all
+                           variants. Overlapping regions should be merged
                            (e.g. using bedtools).''')
     parser.add_argument('-m', '--mapq', type=int, default=0, help=
-                        '''Minimum original mapping quality of contaminant 
-                           read. Contaminant reads with an original mapping 
+                        '''Minimum original mapping quality of contaminant
+                           read. Contaminant reads with an original mapping
                            quality below this value will be ignored. Default=0.
                         ''')
     parser.add_argument('-c', '--contam_ratio', type=float, default=0.0, help=
                         '''Minimum ratio of contaminant reads supporting an
-                           SNV versus total reads supporting an SNV for a 
+                           SNV versus total reads supporting an SNV for a
                            variant to be written to output. Default-0.0.''')
     parser.add_argument('-o', '--output', help=
-                        '''Output file for table of variants and contaminant 
+                        '''Output file for table of variants and contaminant
                            ratios. Defaults to STDOUT.''')
     parser.add_argument('--quiet', action='store_true',  help=
-                        '''Only output error and warning logging 
+                        '''Only output error and warning logging
                            information.''')
     parser.add_argument('--debug', action='store_true', help=
                         '''Output debugging information.''')
