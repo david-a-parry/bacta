@@ -18,7 +18,7 @@ def get_align_output(output, template=None, header=None):
             wbmode = 'w'
         elif output.endswith(('.cram', '.CRAM')):
             wbmode = 'wc'
-        return pysam.AlignmentFile(output, wbmode, template=template, 
+        return pysam.AlignmentFile(output, wbmode, template=template,
                                    header=header)
     return  pysam.AlignmentFile('-', "w", template=template, header=header)
 
@@ -39,12 +39,12 @@ def seek_back_til_reads(bamfile, start_tid=None, ref=None):
             return
 
 def get_tmp_bam(tmpdir=None, template=None, header=None):
-    ''' 
+    '''
         Returns a writeable AlignmentFile with a path created by
         tempfile.mkstemp, using bamfile as a template.
     '''
     (f, tmp_bam) = tempfile.mkstemp(suffix='.bam', dir=tmpdir)
     os.close(f)
-    return (tmp_bam, 
+    return (tmp_bam,
             pysam.AlignmentFile(tmp_bam, "w", template=template, header=header)
            )
