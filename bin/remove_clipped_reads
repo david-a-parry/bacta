@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+import sys
+import argparse
+from bacta.alignment_file_utils import get_align_output, get_bamfile
+from bacta.cigar_scorer import CigarScorer
+
+__version__ = '0.0.1'
+
+def get_options():
+    parser = argparse.ArgumentParser(description='''Remove reads with excessive
+                                     soft or hard clipping from a BAM file.''')
+    parser.add_argument("bam", help=''' Input BAM/SAM file''')
+    parser.add_argument("-o", "--output", help='''Output file name. If not
+                        provided reads will be printed to STDOUT in SAM
+                        format.''')
+    parser.add_argument("-c", "--clipping_threshold", type=float, default=0.15,
+                        help='''Remove reads where the fraction of soft or hard
+                        clipped bases is equal to or greater than this
+                        threshold. Default=0.15.''')
+    parser.add_argument('-p', '--prog_interval', type=int, metavar='N',
+                         default=100000, help='''Report progress every N reads.
+                        Default=100000''')
+    parser.add_argument('--quiet', action='store_true', help='''Only
+                               output error and warning logging
+                               information.''')
+    return parser
+
+def get_pg_id(header):
+        ''' Ensure @PG ID is unique '''
+        pg = "remove_clipped_reads"
+        prog_ids = set(x['ID'] for x in header['PG'])
+        while 1:
+            if pg in prog_ids:
+                if pg == "remove_clipped_reads":
+                    pg = "remove_clipped_reads.1"
+                else:
+                    b,n = pg.split(".")
+                    n = int(n) + 1
+                    pg = "remove_clipped_reads." + str(n)
+            else:
+                return pg
+
+def get_logger(quiet=False, debug=False, logfile=None):
+    logger = logging.getLogger("remove_clipped_reads")
+    if debug:
+        logger.setLevel(logging.DEBUG)
+    elif quiet:
+        logger.setLevel(logging.WARNING)
+    else:
+        logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+                    '[%(asctime)s] %(name)s - %(levelname)s - %(message)s')
+    ch = logging.StreamHandler()
+    ch.setLevel(logger.level)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    if logfile is not None:
+        fh = logging.FileHandler(logfile)
+        fh.setLevel(self.logger.level)
+        fh.setFormatter(formatter)
+        self.logger.addHandler(fh)
+    return logger
+
+def main(bam, output=None, clipping_threshold=0.15, quiet=False,
+         prog_interval=100000):
+    if output is not None:
+        if not output.endswith(('.bam', '.BAM', '.cram', '.CRAM',
+                                 '.sam', '.SAM')):
+            output += '.bam'
+    bf = get_bamfile(bam)
+    header = self.bamfile.header
+    pgid = get_pg_id(header)
+    commandline = str.join(" ", sys.argv)
+    header['PG'].append({'ID' : pgid, 'PN' : 'remove_clipped_reads',
+                         'CL' : commandline, 'VN' : __version__})
+    outbam = get_align_output(output, header=header)
+    cigar_scorer = CigarScorer()
+    written = 0
+    filtered = 0
+    n = 0
+    for read in bf.fetch(until_eof=True):
+        n += 1
+        if not n % prog_interval:
+            coord = "{}:{:,}".format(read.reference_name,
+                                     read.reference_start + 1)
+            logger.info("Reading input: {:,} records read, {:,} filtered. "
+                        .format(n, filtered) + "At pos {}".format(coord))
+        for c in read.cigartuples:
+            if 4 <= c[0] <= 5:
+                #SOFT or HARD clip
+                clipping += c[1]
+                length += c[1]
+            elif c[0] < 2 or 7 <= c[0] <= 8:
+                #MATCH, INS, EQUAL or DIFF
+                length += c[1]
+        if read.is_unmapped:
+            outbam.write(read)
+            written += 1
+            continue
+        if read.has_tag('MD'):
+            clipping += cigar_scorer.md_mismatches(read.get_tag('MD'))
+        frac_clipped = float(clipping)/length
+        if frac_clipped < clipping_threshold:
+            outbam.write(read)
+            written += 1
+        else:
+            filtered += 1
+    bf.close()
+    outbam.close()
+    logger.info("Finished processing reads.")
+    logger.info("{:,} alignments read, {:,} filtered, {:,} written"
+                .format(n, filtered, written))
+
+if __name__ == '__main__':
+    argparser = get_options()
+    args = argparser.parse_args()
+    main(**vars(args))
+
