@@ -16,8 +16,9 @@ setup(
       ],
     scripts = ["bin/bacta", "bin/contam_reads_to_fastq", "bin/summary_to_bed",
                "bin/var_vs_contam",
-               "bin/test_bacta_clipping_thresholds", 
+               "bin/test_bacta_clipping_thresholds",
                "bin/test_bacta_expect_thresholds",
+               "bin/remove_clipped_reads",
         ],
     classifiers = [
         "Programming Language :: Python :: 3",
