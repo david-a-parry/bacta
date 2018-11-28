@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import argparse
+import logging
 from bacta.alignment_file_utils import get_align_output, get_bamfile
 from bacta.cigar_scorer import CigarScorer
 
@@ -13,6 +14,8 @@ def get_options():
     parser.add_argument("-o", "--output", help='''Output file name. If not
                         provided reads will be printed to STDOUT in SAM
                         format.''')
+    parser.add_argument("-f", "--filtered", help='''Filtered reads filename. If
+                        provided filtered reads will written to this file.''')
     parser.add_argument("-c", "--clipping_threshold", type=float, default=0.15,
                         help='''Remove reads where the fraction of soft or hard
                         clipped bases is equal to or greater than this
@@ -56,35 +59,53 @@ def get_logger(quiet=False, debug=False, logfile=None):
     logger.addHandler(ch)
     if logfile is not None:
         fh = logging.FileHandler(logfile)
-        fh.setLevel(self.logger.level)
+        fh.setLevel(logger.level)
         fh.setFormatter(formatter)
-        self.logger.addHandler(fh)
+        logger.addHandler(fh)
     return logger
 
-def main(bam, output=None, clipping_threshold=0.15, quiet=False,
+def main(bam, output=None, filtered=None, clipping_threshold=0.15, quiet=False,
          prog_interval=100000):
     if output is not None:
         if not output.endswith(('.bam', '.BAM', '.cram', '.CRAM',
                                  '.sam', '.SAM')):
             output += '.bam'
     bf = get_bamfile(bam)
-    header = self.bamfile.header
+    header = bf.header
     pgid = get_pg_id(header)
     commandline = str.join(" ", sys.argv)
-    header['PG'].append({'ID' : pgid, 'PN' : 'remove_clipped_reads',
-                         'CL' : commandline, 'VN' : __version__})
+    header['PG'].append({'ID': pgid, 'PN': 'remove_clipped_reads',
+                         'CL': commandline, 'VN': __version__,
+                         #'DS': 'alignments with less than {} '.format(
+                         #      clipping_threshold) + 'nucleotides clipped',
+                        })
     outbam = get_align_output(output, header=header)
+    filtered_bam = None
+    if filtered is not None:
+        #header.update({'DS': 'reads filtered at threshold {}'.format(
+        #    clipping_threshold)})
+        filtered_bam = get_align_output(filtered, header=header)
     cigar_scorer = CigarScorer()
+    logger = get_logger(quiet=quiet)
     written = 0
     filtered = 0
     n = 0
     for read in bf.fetch(until_eof=True):
         n += 1
         if not n % prog_interval:
-            coord = "{}:{:,}".format(read.reference_name,
-                                     read.reference_start + 1)
-            logger.info("Reading input: {:,} records read, {:,} filtered. "
-                        .format(n, filtered) + "At pos {}".format(coord))
+            if read.is_unmapped:
+                pos_string = "At unmapped read"
+            else:
+                pos_string = "At pos {}:{:,}".format(read.reference_name,
+                                                     read.reference_start + 1)
+            logger.info("Reading input: {:,} records read, {:,} filtered. {}"
+                        .format(n, filtered, pos_string))
+        if read.is_unmapped:
+            outbam.write(read)
+            written += 1
+            continue
+        clipping = 0
+        length = 0
         for c in read.cigartuples:
             if 4 <= c[0] <= 5:
                 #SOFT or HARD clip
@@ -93,20 +114,24 @@ def main(bam, output=None, clipping_threshold=0.15, quiet=False,
             elif c[0] < 2 or 7 <= c[0] <= 8:
                 #MATCH, INS, EQUAL or DIFF
                 length += c[1]
-        if read.is_unmapped:
-            outbam.write(read)
-            written += 1
-            continue
         if read.has_tag('MD'):
             clipping += cigar_scorer.md_mismatches(read.get_tag('MD'))
-        frac_clipped = float(clipping)/length
+        try:
+            frac_clipped = float(clipping)/length
+        except ZeroDivisionError:
+            logger.warn("Apparent zero length read: {}".format(read))
+            frac_clipped = 0
         if frac_clipped < clipping_threshold:
             outbam.write(read)
             written += 1
         else:
             filtered += 1
+            if filtered_bam is not None:
+                filtered_bam.write(read)
     bf.close()
     outbam.close()
+    if filtered_bam is not None:
+        filtered_bam.close()
     logger.info("Finished processing reads.")
     logger.info("{:,} alignments read, {:,} filtered, {:,} written"
                 .format(n, filtered, written))
