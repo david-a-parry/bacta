@@ -22,6 +22,15 @@ def get_parser():
                                help='''Write cleaned output BAM to this file.
                                        If specified, a new BAM file without
                                        contaminating reads will be created.''')
+    optional_args.add_argument('--require_min_frac_contaminated',
+                               metavar='FLOAT',
+                               help='''When using --output option, only output
+                                       a cleaned BAM if the fraction of
+                                       contaminant reads vs mapped reads
+                                       reaches this threshold. For example, use
+                                       a value of 1e-4 if you only want to
+                                       create a cleaned BAM if 1/10,000 mapped
+                                       reads is a putative contaminant.''')
     optional_args.add_argument('-c', '--contaminants', metavar='PREFIX',
                                help='''Prefix for contaminant output files.
                                        Defaults to the basename of the input +

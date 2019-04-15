@@ -339,6 +339,7 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
     candidate_qnames = set()
     pair_tracker = defaultdict(dict)
     n = 0
+    n_mapped = 0
     cached = 0
     cigar_scorer = CigarScorer(loglevel)
     if logger is None:
@@ -374,6 +375,8 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
                               "to disk.")
         if read.is_secondary or read.is_supplementary:
             continue
+        if not read.is_unmapped:
+            n_mapped += 1
         #read_name = self.parse_read_name(read.query_name)
         read_name = read.query_name
         p = 2 #read no. of pair
@@ -499,7 +502,7 @@ def process_reads(bam, tmp_fq1, tmp_fq2, tmp_bam, min_frac, min_clip=None,
     cache_bamfile.close()
     fq_writer.close()
     return {"n_cached": cached, "bam_cache": tmp_bam, "fq1": fq_writer.fq1,
-            "fq2": fq_writer.fq2, "paired": paired}
+            "fq2": fq_writer.fq2, "paired": paired, "n_mapped": n_mapped}
 
 def _concat_tmp_fastqs(files, output):
     logger = mp.get_logger()
@@ -517,12 +520,13 @@ def _concat_tmp_fastqs(files, output):
 class BamAnalyzer(object):
 
     def __init__(self, bam, ref, output=None, contaminants=None,
-                bwa=None, samtools=None, min_fraction_clipped=0.15,
-                min_bases_clipped=None, min_expect_diff=1000,
-                min_aligned_score=50, fastqs=None, tmp=None, paired=None,
-                regions=[], vcf=None, flanks=500, ignore_dups=False,
-                threads=1, quiet=False, debug=False, log_file=None,
-                no_caching=False, unaligned=False, decoy_contigs=[]):
+                 require_min_frac_contaminated=None, bwa=None, samtools=None,
+                 min_fraction_clipped=0.15, min_bases_clipped=None,
+                 min_expect_diff=1000, min_aligned_score=50, fastqs=None,
+                 tmp=None, paired=None, regions=[], vcf=None, flanks=500,
+                 ignore_dups=False, threads=1, quiet=False, debug=False,
+                 log_file=None, no_caching=False, unaligned=False,
+                 decoy_contigs=[]):
         '''
             Read and identify potentially contaminating reads in a BAM
             file according to read clipping and a reference fasta file.
@@ -538,6 +542,12 @@ class BamAnalyzer(object):
                 contaminants:
                         Prefix for contaminant output files. Defaults to
                         the basename of the input + "_contaminants".
+
+               require_min_frac_contaminated:
+                        Only output a cleaned BAM (as specified by output
+                        option) if the fraction of contaminant reads to
+                        total mapped reads is equal to or greater than
+                        this value.
 
                 regions:
                         List of regions (in format chr1:1-1000) to scan
@@ -647,6 +657,7 @@ class BamAnalyzer(object):
         self.min_bases_clipped = min_bases_clipped
         self.min_expect_diff = min_expect_diff
         self.min_aligned_score  = min_aligned_score
+        self.require_min_frac_contaminated = require_min_frac_contaminated
         self.tmp = tmp
         self.tmp_files = []
         self.no_caching = no_caching
@@ -853,6 +864,13 @@ class BamAnalyzer(object):
             self.logger.warn("No candidate reads for cleaning - skipping bam" +
                              " cleaning.")
             return
+        if self.require_min_frac_contaminated:
+            f_contam = float(self.n_contam)/self.n_mapped
+            if f_contam < self.require_min_frac_contaminated:
+                self.logger.warn("Contaminant/mapped reads < {:g} - ".format(
+                    self.require_min_frac_contaminated) + " skipping bam " +
+                    " cleaning.")
+                return
         if self.bamfile.is_open():
             #want to make sure we reset pointer to beggining of file
             self.bamfile.close()
@@ -925,6 +943,7 @@ class BamAnalyzer(object):
                         stdin=PIPE, bufsize=-1)
         bwamem = Popen(args, bufsize=-1, stdout=PIPE)
         nparsed = 0
+        self.n_contam = 0
         for alignment in bwamem.stdout:
             samwrite.stdin.write(alignment)
             alignment = alignment.decode(sys.stdout.encoding)
@@ -986,6 +1005,7 @@ class BamAnalyzer(object):
                                                   p_split, p_old_cigar,
                                                   p_old_pos, p_old_mapq, p_md,
                                                   p_old_md)
+                        self.n_contam += 2
                     del pairs[split[0]]
                 else:
                     pairs[split[0]] = (split, score, old_score, e, old_e,
@@ -997,6 +1017,7 @@ class BamAnalyzer(object):
                     self.write_contam_summary(contam_out, score, old_score, e,
                                               old_e, split, old_cigar, old_pos,
                                               old_mapq, md, old_md)
+                    self.n_contam += 1
         contam_out.close()
         samwrite.stdin.close()
         bwamem.stdout.close()
@@ -1127,6 +1148,7 @@ class BamAnalyzer(object):
         #self.bam_cache.close()
         n_cached = sum(x['n_cached'] for x in results)
         self.paired = sum(x['paired'] for x in results)
+        self.n_mapped = sum(x['n_mapped'] for x in results)
         fq1s = list(x['fq1'] for x in results)
         fq2s = list(x['fq2'] for x in results)
         cached_bams = list(x['bam_cache'] for x in results)
