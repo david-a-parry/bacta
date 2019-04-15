@@ -37,9 +37,18 @@ def write_table(counts, fh):
     df['Sensitivity'] = df.TP/total_contam
     df['1-Specificity'] = df.FP/total_ref
     df['Precision'] = df.TP/(df.TP + df.FP)
+    df['F1'] = 2 * df.Precision * df.Sensitivity /(df.Precision +
+                                                   df.Sensitivity)
+    df['F2'] = (1 + 2)  * df.Precision * df.Sensitivity /(2 * df.Precision +
+                                                          df.Sensitivity)
     df.to_csv(fh, sep='\t', index=False)
     fh.close()
     return df
+
+def calculate_fbeta_score(precision, recall, beta=1.0):
+    beta = beta ** 2
+    return ((1 + beta) * precision * recall /
+            (beta * precision + recall))
 
 def calculate_average_precision(df, logger):
     '''Calculate average precision from recall/sensitivity and precision'''
