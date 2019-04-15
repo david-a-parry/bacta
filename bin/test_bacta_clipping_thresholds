@@ -128,6 +128,20 @@ def write_plots(df, prefix, logger):
         pdf.savefig()
         logger.info("Finished generating plots")
 
+        #F1 curve
+        logger.info("Writing ROC curve...")
+        n = 0
+        plt.figure(figsize=(11.7, 8.27), dpi=300)
+        plt.plot(df['Threshold'], df['F1'], lw=lw, marker='o',)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('Threshold')
+        plt.ylabel('F1 score')
+        plt.title('F1 scores at read clipping thresholds')
+        plt.legend(loc="lower right")
+        pdf.savefig()
+        logger.info("Finished generating plots")
+
 def _process_runner(tup):
     kwargs1, kwargs2 = tup
     kwargs2.update(kwargs1)
