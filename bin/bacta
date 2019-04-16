@@ -22,7 +22,7 @@ def get_parser():
                                help='''Write cleaned output BAM to this file.
                                        If specified, a new BAM file without
                                        contaminating reads will be created.''')
-    optional_args.add_argument('--require_min_frac_contaminated',
+    optional_args.add_argument('--require_min_frac_contaminated', type=float,
                                metavar='FLOAT',
                                help='''When using --output option, only output
                                        a cleaned BAM if the fraction of
