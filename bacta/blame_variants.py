@@ -116,7 +116,7 @@ class BlameVariants(object):
         contam = []
         non_contam = []
         for alt in var.DECOMPOSED_ALLELES:
-            if len(alt.REF) != 1 and len(alt.ALT) != 1: #SNVs only
+            if len(alt.REF) != 1 or len(alt.ALT) != 1: #SNVs only
                 continue
             pileup_iter = self.bamfile.pileup(alt.CHROM, alt.POS-1, alt.POS)
             supporting_contam = 0
