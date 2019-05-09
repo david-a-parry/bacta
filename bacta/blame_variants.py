@@ -13,9 +13,10 @@ class BlameVariants(object):
     '''
 
     def __init__(self, contaminants, variants, bam, bed=None, output=None,
-                 mapq=0, contam_ratio=0.0, quiet=False, debug=False):
+                 mapq=0, baseq=0, contam_ratio=0.0, quiet=False, debug=False):
         self.logger = self._get_logger(quiet, debug)
         self.mapq = mapq
+        self.baseq = baseq
         self.contam_ratio = contam_ratio
         self.read_contam_file(contaminants)
         self.vcf = VcfReader(variants)
@@ -118,7 +119,9 @@ class BlameVariants(object):
         for alt in var.DECOMPOSED_ALLELES:
             if len(alt.REF) != 1 or len(alt.ALT) != 1: #SNVs only
                 continue
-            pileup_iter = self.bamfile.pileup(alt.CHROM, alt.POS-1, alt.POS)
+            pileup_iter = self.bamfile.pileup(alt.CHROM, alt.POS-1, alt.POS,
+                                              min_mapping_quality=self.mapq,
+                                              min_base_quality=self.baseq)
             supporting_contam = 0
             supporting_non_contam = 0
             for x in pileup_iter:
