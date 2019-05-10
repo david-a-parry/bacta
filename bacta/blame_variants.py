@@ -120,6 +120,7 @@ class BlameVariants(object):
             if len(alt.REF) != 1 or len(alt.ALT) != 1: #SNVs only
                 continue
             pileup_iter = self.bamfile.pileup(alt.CHROM, alt.POS-1, alt.POS,
+                                              stepper='samtools',
                                               min_mapping_quality=self.mapq,
                                               min_base_quality=self.baseq)
             supporting_contam = 0
